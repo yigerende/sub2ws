@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -158,6 +159,134 @@ func TestNormalizeResponsesBodyServiceTier(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, tier)
 	require.False(t, gjson.GetBytes(body, "service_tier").Exists())
+}
+
+func TestForwardAsChatCompletions_HTTPIngressUsesAccountWS(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket failed: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		var request map[string]any
+		if err := conn.ReadJSON(&request); err != nil {
+			t.Errorf("read websocket request failed: %v", err)
+			return
+		}
+		if request["type"] != "response.create" {
+			t.Errorf("unexpected websocket event: %#v", request["type"])
+			return
+		}
+		if request["stream"] != true {
+			t.Errorf("chat compatibility websocket request must stream: %#v", request["stream"])
+			return
+		}
+
+		events := []map[string]any{
+			{
+				"type": "response.created",
+				"response": map[string]any{
+					"id": "resp_chat_ws", "model": "gpt-5.1", "status": "in_progress", "output": []any{},
+				},
+			},
+			{"type": "response.output_text.delta", "delta": "hello"},
+			{
+				"type": "response.completed",
+				"response": map[string]any{
+					"id": "resp_chat_ws", "object": "response", "model": "gpt-5.1", "status": "completed",
+					"output": []any{map[string]any{
+						"type": "message", "id": "msg_1", "role": "assistant", "status": "completed",
+						"content": []any{map[string]any{"type": "output_text", "text": "hello"}},
+					}},
+					"usage": map[string]any{"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
+				},
+			},
+		}
+		for _, event := range events {
+			if err := conn.WriteJSON(event); err != nil {
+				t.Errorf("write websocket event failed: %v", err)
+				return
+			}
+		}
+	}))
+	defer wsServer.Close()
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
+
+	httpUpstream := &httpUpstreamRecorder{}
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		httpUpstream:     httpUpstream,
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+	}
+	account := &Account{
+		ID:          501,
+		Name:        "chat-ws-account",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 2,
+		Credentials: map[string]any{"api_key": "sk-test", "base_url": wsServer.URL},
+		Extra: map[string]any{
+			"openai_apikey_responses_websockets_v2_mode":    OpenAIWSIngressModeCtxPool,
+			"openai_apikey_responses_websockets_v2_enabled": true,
+		},
+	}
+
+	t.Run("streaming client gets Chat Completions SSE", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+
+		result, err := svc.ForwardAsChatCompletions(
+			context.Background(), c, account,
+			[]byte(`{"model":"gpt-5.1","stream":true,"messages":[{"role":"user","content":"hi"}]}`),
+			"cache-chat-ws", "",
+		)
+
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.True(t, result.OpenAIWSMode)
+		require.Equal(t, "resp_chat_ws", result.RequestID)
+		require.Nil(t, httpUpstream.lastReq, "ctx_pool must not send an HTTP upstream request")
+		require.Equal(t, "/v1/responses", GetActualOpenAIUpstreamEndpoint(c))
+		require.Contains(t, recorder.Body.String(), `"object":"chat.completion.chunk"`)
+		require.Contains(t, recorder.Body.String(), `"content":"hello"`)
+		require.NotContains(t, recorder.Body.String(), `"type":"response.output_text.delta"`)
+	})
+
+	t.Run("non-streaming client gets Chat Completions JSON", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+
+		result, err := svc.ForwardAsChatCompletions(
+			context.Background(), c, account,
+			[]byte(`{"model":"gpt-5.1","stream":false,"messages":[{"role":"user","content":"hi"}]}`),
+			"cache-chat-ws-buffered", "",
+		)
+
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.True(t, result.OpenAIWSMode)
+		require.False(t, result.Stream)
+		require.Nil(t, httpUpstream.lastReq, "ctx_pool must not send an HTTP upstream request")
+		require.Equal(t, "chat.completion", gjson.Get(recorder.Body.String(), "object").String())
+		require.Equal(t, "hello", gjson.Get(recorder.Body.String(), "choices.0.message.content").String())
+	})
 }
 
 func TestForwardAsChatCompletions_UnknownModelWithoutMessagesDispatchKeepsRequestedModel(t *testing.T) {

@@ -242,6 +242,37 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		}
 	}
 
+	// The account WS mode is an upstream transport policy, so Chat Completions
+	// compatibility requests must use the same native Responses WS pool as
+	// direct /v1/responses requests. Keep the downstream protocol unchanged by
+	// converting the WS Responses event stream back to Chat Completions below.
+	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
+	wsDecision = resolveOpenAIWSDecisionForRequest(wsDecision, OpenAIClientTransportHTTP, account, false)
+	if wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 {
+		responsesBody, err = sjson.SetBytes(responsesBody, "stream", true)
+		if err != nil {
+			return nil, fmt.Errorf("force streaming responses body for websocket bridge: %w", err)
+		}
+		if promptCacheKey != "" {
+			responsesBody, err = sjson.SetBytes(responsesBody, "prompt_cache_key", promptCacheKey)
+			if err != nil {
+				return nil, fmt.Errorf("set prompt cache key for websocket bridge: %w", err)
+			}
+		}
+		return s.forwardChatCompletionsViaOpenAIWS(
+			ctx,
+			c,
+			account,
+			responsesBody,
+			clientStream,
+			originalModel,
+			billingModel,
+			upstreamModel,
+			startTime,
+			len(body),
+		)
+	}
+
 	logFields := []zap.Field{
 		zap.Int64("account_id", account.ID),
 		zap.String("original_model", originalModel),
