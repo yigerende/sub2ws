@@ -89,19 +89,46 @@ func TestOpenAIClientTransport_NilAndUnknownInput(t *testing.T) {
 	require.False(t, exists)
 }
 
-func TestResolveOpenAIWSDecisionByClientTransport(t *testing.T) {
+func TestResolveOpenAIWSDecisionForRequest(t *testing.T) {
 	base := OpenAIWSProtocolDecision{
 		Transport: OpenAIUpstreamTransportResponsesWebsocketV2,
 		Reason:    "ws_v2_enabled",
 	}
+	enabledAccount := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Extra: map[string]any{
+			"openai_apikey_responses_websockets_v2_mode":    OpenAIWSIngressModeCtxPool,
+			"openai_apikey_responses_websockets_v2_enabled": true,
+		},
+	}
+	disabledAccount := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 
-	httpDecision := resolveOpenAIWSDecisionByClientTransport(base, OpenAIClientTransportHTTP)
-	require.Equal(t, OpenAIUpstreamTransportHTTPSSE, httpDecision.Transport)
-	require.Equal(t, "client_protocol_http", httpDecision.Reason)
+	responsesDecision := resolveOpenAIWSDecisionForRequest(base, OpenAIClientTransportHTTP, enabledAccount, false)
+	require.Equal(t, base, responsesDecision)
+	for _, accountType := range []string{AccountTypeOAuth, AccountTypeSetupToken} {
+		oauthAccount := &Account{
+			Platform: PlatformOpenAI,
+			Type:     accountType,
+			Extra: map[string]any{
+				"openai_oauth_responses_websockets_v2_mode":    OpenAIWSIngressModeCtxPool,
+				"openai_oauth_responses_websockets_v2_enabled": true,
+			},
+		}
+		require.Equal(
+			t,
+			base,
+			resolveOpenAIWSDecisionForRequest(base, OpenAIClientTransportHTTP, oauthAccount, false),
+			"account type %s should allow HTTP ingress to use upstream WS when explicitly enabled",
+			accountType,
+		)
+	}
 
-	wsDecision := resolveOpenAIWSDecisionByClientTransport(base, OpenAIClientTransportWS)
-	require.Equal(t, base, wsDecision)
+	disabledDecision := resolveOpenAIWSDecisionForRequest(base, OpenAIClientTransportHTTP, disabledAccount, false)
+	require.Equal(t, OpenAIUpstreamTransportHTTPSSE, disabledDecision.Transport)
+	require.Equal(t, "account_http_ws_disabled", disabledDecision.Reason)
 
-	unknownDecision := resolveOpenAIWSDecisionByClientTransport(base, OpenAIClientTransportUnknown)
-	require.Equal(t, base, unknownDecision)
+	compactDecision := resolveOpenAIWSDecisionForRequest(base, OpenAIClientTransportHTTP, enabledAccount, true)
+	require.Equal(t, OpenAIUpstreamTransportHTTPSSE, compactDecision.Transport)
+	require.Equal(t, "responses_compact_requires_http", compactDecision.Reason)
 }

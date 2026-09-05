@@ -60,12 +60,31 @@ func normalizeOpenAIClientTransport(transport OpenAIClientTransport) OpenAIClien
 	}
 }
 
-func resolveOpenAIWSDecisionByClientTransport(
+// resolveOpenAIWSDecisionForRequest applies endpoint-level transport constraints.
+// An HTTP client is not itself a reason to downgrade an explicitly enabled
+// account: HTTP/SSE clients can use the native upstream WebSocket pool as well.
+func resolveOpenAIWSDecisionForRequest(
 	decision OpenAIWSProtocolDecision,
 	clientTransport OpenAIClientTransport,
+	account *Account,
+	compactPath bool,
 ) OpenAIWSProtocolDecision {
+	if compactPath {
+		return openAIWSHTTPDecision("responses_compact_requires_http")
+	}
+	if decision.Transport == OpenAIUpstreamTransportHTTPSSE {
+		return decision
+	}
 	if clientTransport == OpenAIClientTransportHTTP {
-		return openAIWSHTTPDecision("client_protocol_http")
+		// A global ctx_pool default must not opt existing accounts into HTTP -> WS.
+		// Only an explicit account mode/legacy enabled flag may change HTTP ingress.
+		mode := account.ResolveOpenAIResponsesWebSocketV2Mode(OpenAIWSIngressModeOff)
+		if mode == OpenAIWSIngressModeOff {
+			return openAIWSHTTPDecision("account_http_ws_disabled")
+		}
+		if mode == OpenAIWSIngressModeHTTPBridge {
+			return openAIWSHTTPDecision("ws_v2_mode_http_bridge")
+		}
 	}
 	return decision
 }

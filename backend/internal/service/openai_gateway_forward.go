@@ -105,10 +105,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
-	// 仅允许 WS 入站请求走 WS 上游，避免出现 HTTP -> WS 协议混用。
-	wsDecision = resolveOpenAIWSDecisionByClientTransport(wsDecision, GetOpenAIClientTransport(c))
 	passthroughEnabled := account.IsOpenAIPassthroughEnabled()
 	compactPath := isOpenAIResponsesCompactPath(c)
+	// WS mode is an account-level upstream policy. HTTP/SSE and WebSocket clients
+	// share the native WS pool; compact remains HTTP because it uses a distinct
+	// unary endpoint rather than /v1/responses.
+	wsDecision = resolveOpenAIWSDecisionForRequest(wsDecision, GetOpenAIClientTransport(c), account, compactPath)
 	if shouldFlattenOpenAIResponsesNamespaces(account, wsDecision.Transport, passthroughEnabled, compactPath) {
 		body, err = flattenOpenAIResponsesNamespaces(c, body)
 		if err != nil {

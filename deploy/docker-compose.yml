@@ -5,19 +5,24 @@
 #   1. Copy .env.example to .env and configure
 #   2. docker-compose up -d
 #   3. Check logs: docker-compose logs -f sub2api
-#   4. Access: http://localhost:8080
+#   4. Access: http://localhost:8081
 #
 # All configuration is done via environment variables.
 # No Setup Wizard needed - the system auto-initializes on first run.
 # =============================================================================
+
+name: sub2api-ws
 
 services:
   # ===========================================================================
   # Sub2API Application
   # ===========================================================================
   sub2api:
-    image: weishaw/sub2api:latest
-    container_name: sub2api
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: sub2api-ws:latest
+    container_name: sub2api-ws
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
@@ -26,10 +31,10 @@ services:
         soft: 100000
         hard: 100000
     ports:
-      - "${BIND_HOST:-0.0.0.0}:${SERVER_PORT:-8080}:8080"
+      - "${BIND_HOST:-0.0.0.0}:${SERVER_PORT:-8081}:8080"
     volumes:
       # Data persistence (config.yaml will be auto-generated here)
-      - sub2api_data:/app/data
+      - sub2api_ws_data:/app/data
       # Optional: Mount custom config.yaml (uncomment and create the file first)
       # Copy config.example.yaml to config.yaml, modify it, then uncomment:
       # - ./config.yaml:/app/data/config.yaml
@@ -205,7 +210,7 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - sub2api-network
+      - sub2api-ws-network
     healthcheck:
       test:
         [
@@ -230,7 +235,7 @@ services:
   # ===========================================================================
   postgres:
     image: postgres:18-alpine
-    container_name: sub2api-postgres
+    container_name: sub2api-ws-postgres
     restart: unless-stopped
     ulimits:
       nofile:
@@ -246,10 +251,10 @@ services:
       -c effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-4GB}
       -c maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-64MB}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - sub2api_ws_postgres_data:/var/lib/postgresql/data
     environment:
       # postgres:18-alpine 默认 PGDATA=/var/lib/postgresql/18/docker（位于镜像声明的匿名卷 /var/lib/postgresql 内）。
-      # 若不显式设置 PGDATA，则即使挂载了 postgres_data 到 /var/lib/postgresql/data，数据也不会落盘到该命名卷，
+      # 若不显式设置 PGDATA，则即使挂载了 sub2api_ws_postgres_data 到 /var/lib/postgresql/data，数据也不会落盘到该命名卷，
       # docker compose down/up 后会触发 initdb 重新初始化，导致用户/密码等数据丢失。
       - PGDATA=/var/lib/postgresql/data
       - POSTGRES_USER=${POSTGRES_USER:-sub2api}
@@ -257,7 +262,7 @@ services:
       - POSTGRES_DB=${POSTGRES_DB:-sub2api}
       - TZ=${TZ:-Asia/Shanghai}
     networks:
-      - sub2api-network
+      - sub2api-ws-network
     healthcheck:
       test:
         [
@@ -276,14 +281,14 @@ services:
   # ===========================================================================
   redis:
     image: redis:8-alpine
-    container_name: sub2api-redis
+    container_name: sub2api-ws-redis
     restart: unless-stopped
     ulimits:
       nofile:
         soft: 100000
         hard: 100000
     volumes:
-      - redis_data:/data
+      - sub2api_ws_redis_data:/data
     # The command is one quoted script for the inner `sh -c`. Compose keeps
     # the newlines inside the quoted string, so every line needs a trailing
     # `\` — without it, `redis-server` on the first line runs with no flags
@@ -300,7 +305,7 @@ services:
       # REDISCLI_AUTH is used by redis-cli for authentication (safer than -a flag)
       - REDISCLI_AUTH=${REDIS_PASSWORD:-}
     networks:
-      - sub2api-network
+      - sub2api-ws-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -313,16 +318,20 @@ services:
 # Volumes
 # =============================================================================
 volumes:
-  sub2api_data:
+  sub2api_ws_data:
+    name: sub2api_ws_data
     driver: local
-  postgres_data:
+  sub2api_ws_postgres_data:
+    name: sub2api_ws_postgres_data
     driver: local
-  redis_data:
+  sub2api_ws_redis_data:
+    name: sub2api_ws_redis_data
     driver: local
 
 # =============================================================================
 # Networks
 # =============================================================================
 networks:
-  sub2api-network:
+  sub2api-ws-network:
+    name: sub2api-ws-network
     driver: bridge

@@ -669,14 +669,14 @@ export default {
           '默认关闭。开启后可启用 responses_websockets_v2 协议能力（受网关全局开关与账号类型开关约束）。',
         wsMode: 'WS mode',
         wsModeDesc:
-          '仅对当前 OpenAI 账号类型生效；包括 http_bridge 在内的账号 WS mode 仅在全局 gateway.openai_ws.mode_router_v2_enabled=true 时生效。',
+          '选择 ctx_pool 后，无论客户端使用 HTTP/SSE 还是 WebSocket，Sub2API 到 OpenAI 都使用原生 WS 连接池；关闭后保持原 HTTP/SSE 路由。passthrough 和 http_bridge 仅用于客户端 WS 入站。账号 WS mode 需全局 gateway.openai_ws.mode_router_v2_enabled=true 才生效。',
         wsModeOff: '关闭（off）',
         wsModeCtxPool: '上下文池（ctx_pool）',
         wsModePassthrough: '透传（passthrough）',
         wsModeHttpBridge: 'HTTP 桥接（http_bridge）',
         wsModeShared: '共享（shared）',
         wsModeDedicated: '独享（dedicated）',
-        wsModeConcurrencyHint: '启用 WS mode 后，该账号并发数将作为该账号 WS 连接池上限。',
+        wsModeConcurrencyHint: 'ctx_pool 模式下，该账号并发数将作为 WS 连接池上限。',
         wsModePassthroughHint: 'passthrough 模式不使用 WS 连接池。',
         oauthResponsesWebsocketsV2: 'OAuth WebSocket Mode',
         oauthResponsesWebsocketsV2Desc:
