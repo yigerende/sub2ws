@@ -203,6 +203,7 @@ func (s *OpenAIGatewayService) forwardChatCompletionsViaOpenAIWS(
 		earlyOutcome = &outcome
 	}
 	if earlyOutcome != nil {
+		SetActualOpenAIUpstreamEndpoint(c, "/v1/responses")
 		return mergeOpenAIWSChatResult(nil, earlyOutcome.result), earlyOutcome.err
 	}
 
@@ -228,6 +229,9 @@ func (s *OpenAIGatewayService) forwardChatCompletionsViaOpenAIWS(
 		_ = reader.CloseWithError(convertErr)
 	}
 	outcome := <-outcomeCh
+	// Forward clears and records endpoint state on its private bridge context.
+	// Keep the outer request authoritative for usage and operations records.
+	SetActualOpenAIUpstreamEndpoint(c, "/v1/responses")
 	converted = mergeOpenAIWSChatResult(converted, outcome.result)
 	if outcome.err != nil {
 		return converted, outcome.err
