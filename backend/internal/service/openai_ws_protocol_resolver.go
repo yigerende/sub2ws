@@ -10,6 +10,11 @@ const (
 	OpenAIUpstreamTransportHTTPSSE              OpenAIUpstreamTransport = "http_sse"
 	OpenAIUpstreamTransportResponsesWebsocket   OpenAIUpstreamTransport = "responses_websockets"
 	OpenAIUpstreamTransportResponsesWebsocketV2 OpenAIUpstreamTransport = "responses_websockets_v2"
+	// OpenAIUpstreamTransportResponsesWebsocketCPA is the account-scoped CPA
+	// compatible execution profile. It is intentionally separate from the
+	// existing Sub2API ctx_pool mode so the latter remains unchanged when the
+	// account switch is off.
+	OpenAIUpstreamTransportResponsesWebsocketCPA OpenAIUpstreamTransport = "responses_websockets_cpa"
 	// OpenAIUpstreamTransportResponsesWebsocketV2Ingress 用于 WS ingress 入口选账号：
 	// mode_router_v2 开启时允许 ctx_pool/passthrough/http_bridge，拒绝 off。
 	OpenAIUpstreamTransportResponsesWebsocketV2Ingress OpenAIUpstreamTransport = "responses_websockets_v2_ingress"
@@ -19,6 +24,10 @@ const (
 type OpenAIWSProtocolDecision struct {
 	Transport OpenAIUpstreamTransport
 	Reason    string
+}
+
+func isOpenAIResponsesWebsocketTransport(transport OpenAIUpstreamTransport) bool {
+	return transport == OpenAIUpstreamTransportResponsesWebsocketV2 || transport == OpenAIUpstreamTransportResponsesWebsocketCPA
 }
 
 // OpenAIWSProtocolResolver 定义 OpenAI 上游协议决策。
@@ -66,6 +75,23 @@ func (r *defaultOpenAIWSProtocolResolver) Resolve(account *Account) OpenAIWSProt
 		}
 	} else {
 		return openAIWSHTTPDecision("unknown_auth_type")
+	}
+	// CPA WS is an explicit account-level profile and takes precedence over
+	// the existing Sub2API mode router. The old resolver remains unchanged for
+	// accounts without this flag.
+	if account.IsOpenAICPAWebSocketEnabled() {
+		if account.Concurrency <= 0 {
+			return openAIWSHTTPDecision("account_concurrency_invalid")
+		}
+		// CPA execution profile is built on the Responses WS v2 protocol; do
+		// not silently activate it when an installation only enables legacy WS v1.
+		if !wsCfg.ResponsesWebsocketsV2 {
+			return openAIWSHTTPDecision("feature_disabled")
+		}
+		return OpenAIWSProtocolDecision{
+			Transport: OpenAIUpstreamTransportResponsesWebsocketCPA,
+			Reason:    "account_cpa_ws_enabled",
+		}
 	}
 	if wsCfg.ModeRouterV2Enabled {
 		mode := account.ResolveOpenAIResponsesWebSocketV2Mode(wsCfg.IngressModeDefault)

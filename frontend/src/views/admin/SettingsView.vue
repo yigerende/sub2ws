@@ -5190,6 +5190,21 @@
             </div>
           </div>
 
+          <!-- CPA-style upstream WebSocket execution -->
+          <div class="card">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">CPA WS 上游执行参数</h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">只作用于账号开启“CPA WS 执行逻辑”后的上游连接池；不改变账号选择、计费和普通 Sub2API WS。</p>
+            </div>
+            <div class="grid grid-cols-1 gap-4 p-6 md:grid-cols-2 xl:grid-cols-4">
+              <label v-for="field in cpaWSSettingFields" :key="field.key" class="block">
+                <span class="text-xs font-medium text-gray-600 dark:text-gray-400">{{ field.label }}</span>
+                <input v-model.number="form[field.key]" class="input mt-1" :min="field.min" :max="field.max" :step="field.step || 1" type="number" />
+                <span class="mt-1 block text-[11px] text-gray-400">{{ field.hint }}</span>
+              </label>
+            </div>
+          </div>
+
           <!-- Gateway Forwarding Behavior -->
           <div class="card">
             <div
@@ -9518,6 +9533,23 @@ type SettingsForm = Omit<
   openai_advanced_scheduler_weight_upstream_cost: string;
   openai_advanced_scheduler_weight_previous_response: string;
   openai_advanced_scheduler_weight_session_sticky: string;
+  cpa_ws_max_conns_per_account: number;
+  cpa_ws_min_idle_per_account: number;
+  cpa_ws_max_idle_per_account: number;
+  cpa_ws_queue_limit_per_conn: number;
+  cpa_ws_pool_target_utilization: number;
+  cpa_ws_max_requests_per_conn: number;
+  cpa_ws_max_conn_age_seconds: number;
+  cpa_ws_dial_timeout_seconds: number;
+  cpa_ws_read_timeout_seconds: number;
+  cpa_ws_write_timeout_seconds: number;
+  cpa_ws_prewarm_cooldown_ms: number;
+  cpa_ws_retry_backoff_initial_ms: number;
+  cpa_ws_retry_backoff_max_ms: number;
+  cpa_ws_retry_jitter_ratio: number;
+  cpa_ws_retry_total_budget_ms: number;
+  cpa_ws_event_flush_batch_size: number;
+  cpa_ws_event_flush_interval_ms: number;
   // 系统全局平台限额 map；form 内始终归一化为全 4 平台对象（模板非空绑定依赖此不变量）
   default_platform_quotas: DefaultPlatformQuotasMap;
   account_scheduling_thresholds: ReturnType<typeof normalizeAccountSchedulingThresholdsMap>;
@@ -9760,6 +9792,23 @@ const form = reactive<SettingsForm>({
   openai_advanced_scheduler_weight_upstream_cost: "",
   openai_advanced_scheduler_weight_previous_response: "",
   openai_advanced_scheduler_weight_session_sticky: "",
+  cpa_ws_max_conns_per_account: 48,
+  cpa_ws_min_idle_per_account: 3,
+  cpa_ws_max_idle_per_account: 48,
+  cpa_ws_queue_limit_per_conn: 1,
+  cpa_ws_pool_target_utilization: 1,
+  cpa_ws_max_requests_per_conn: 0,
+  cpa_ws_max_conn_age_seconds: 21600,
+  cpa_ws_dial_timeout_seconds: 30,
+  cpa_ws_read_timeout_seconds: 300,
+  cpa_ws_write_timeout_seconds: 300,
+  cpa_ws_prewarm_cooldown_ms: 0,
+  cpa_ws_retry_backoff_initial_ms: 0,
+  cpa_ws_retry_backoff_max_ms: 0,
+  cpa_ws_retry_jitter_ratio: 0,
+  cpa_ws_retry_total_budget_ms: 0,
+  cpa_ws_event_flush_batch_size: 1,
+  cpa_ws_event_flush_interval_ms: 0,
   // Gateway forwarding behavior
   openai_ttft_mode: "semantic",
   enable_fingerprint_unification: true,
@@ -9966,6 +10015,39 @@ const openAIAdvancedSchedulerWeightFields = computed<
     },
   ];
 });
+
+type CPAWSSettingKey =
+  | "cpa_ws_max_conns_per_account" | "cpa_ws_min_idle_per_account" | "cpa_ws_max_idle_per_account"
+  | "cpa_ws_queue_limit_per_conn" | "cpa_ws_pool_target_utilization" | "cpa_ws_max_requests_per_conn"
+  | "cpa_ws_max_conn_age_seconds" | "cpa_ws_dial_timeout_seconds"
+  | "cpa_ws_read_timeout_seconds" | "cpa_ws_write_timeout_seconds" | "cpa_ws_prewarm_cooldown_ms"
+  | "cpa_ws_retry_backoff_initial_ms" | "cpa_ws_retry_backoff_max_ms" | "cpa_ws_retry_jitter_ratio"
+  | "cpa_ws_retry_total_budget_ms" | "cpa_ws_event_flush_batch_size" | "cpa_ws_event_flush_interval_ms";
+
+const cpaWSSettingFields: Array<{ key: CPAWSSettingKey; label: string; hint: string; min: number; max?: number; step?: number }> = [
+  { key: "cpa_ws_max_conns_per_account", label: "最大连接数/账号", hint: "面向 20-40 并发默认 48", min: 1 },
+  { key: "cpa_ws_min_idle_per_account", label: "预热空闲连接", hint: "CPA 默认预热 3 条备用连接", min: 0 },
+  { key: "cpa_ws_max_idle_per_account", label: "最大空闲连接", hint: "保留已建立连接，默认 48", min: 0 },
+  { key: "cpa_ws_queue_limit_per_conn", label: "单连接排队上限", hint: "CPA 忙连接不排长队，默认 1", min: 1 },
+  { key: "cpa_ws_pool_target_utilization", label: "目标利用率", hint: "0-1，建议 1", min: 0.1, max: 1, step: 0.05 },
+  { key: "cpa_ws_max_requests_per_conn", label: "单连接最大请求数", hint: "默认 0，不按请求数强制轮换", min: 0 },
+  { key: "cpa_ws_max_conn_age_seconds", label: "单连接最长寿命（秒）", hint: "默认 21600 秒（6 小时）", min: 1 },
+  { key: "cpa_ws_dial_timeout_seconds", label: "拨号超时（秒）", hint: "CPA 握手默认 30 秒", min: 1 },
+  { key: "cpa_ws_read_timeout_seconds", label: "读取超时（秒）", hint: "CPA 上游空闲窗口默认 300 秒", min: 1 },
+  { key: "cpa_ws_write_timeout_seconds", label: "写入超时（秒）", hint: "兼容层保护值，默认 300 秒", min: 1 },
+  { key: "cpa_ws_prewarm_cooldown_ms", label: "预热冷却（毫秒）", hint: "CPA 不额外延迟预热，默认 0", min: 0 },
+  { key: "cpa_ws_retry_backoff_initial_ms", label: "重试初始退避（毫秒）", hint: "CPA 断线立即重放一次，默认 0", min: 0 },
+  { key: "cpa_ws_retry_backoff_max_ms", label: "重试最大退避（毫秒）", hint: "CPA 不增加指数退避，默认 0", min: 0 },
+  { key: "cpa_ws_retry_jitter_ratio", label: "重试抖动比例", hint: "CPA 默认不加抖动，默认 0", min: 0, max: 1, step: 0.05 },
+  { key: "cpa_ws_retry_total_budget_ms", label: "重试总预算（毫秒）", hint: "0 表示不额外限制", min: 0 },
+  { key: "cpa_ws_event_flush_batch_size", label: "事件批量刷新数", hint: "默认 1，事件立即下发", min: 1 },
+  { key: "cpa_ws_event_flush_interval_ms", label: "事件刷新间隔（毫秒）", hint: "默认 0，不等待批量窗口", min: 0 },
+];
+
+function cpaWSNumberOrDefault(value: number, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
 
 const authSourceDefaults = reactive<AuthSourceDefaultsState>(
   buildAuthSourceDefaultsState({}),
@@ -11438,6 +11520,23 @@ async function saveSettings() {
         form.openai_advanced_scheduler_weight_previous_response.trim(),
       openai_advanced_scheduler_weight_session_sticky:
         form.openai_advanced_scheduler_weight_session_sticky.trim(),
+      cpa_ws_max_conns_per_account: cpaWSNumberOrDefault(form.cpa_ws_max_conns_per_account, 48),
+      cpa_ws_min_idle_per_account: cpaWSNumberOrDefault(form.cpa_ws_min_idle_per_account, 3),
+      cpa_ws_max_idle_per_account: cpaWSNumberOrDefault(form.cpa_ws_max_idle_per_account, 48),
+      cpa_ws_queue_limit_per_conn: cpaWSNumberOrDefault(form.cpa_ws_queue_limit_per_conn, 1),
+      cpa_ws_pool_target_utilization: cpaWSNumberOrDefault(form.cpa_ws_pool_target_utilization, 1),
+      cpa_ws_max_requests_per_conn: cpaWSNumberOrDefault(form.cpa_ws_max_requests_per_conn, 0),
+      cpa_ws_max_conn_age_seconds: cpaWSNumberOrDefault(form.cpa_ws_max_conn_age_seconds, 21600),
+      cpa_ws_dial_timeout_seconds: cpaWSNumberOrDefault(form.cpa_ws_dial_timeout_seconds, 30),
+      cpa_ws_read_timeout_seconds: cpaWSNumberOrDefault(form.cpa_ws_read_timeout_seconds, 300),
+      cpa_ws_write_timeout_seconds: cpaWSNumberOrDefault(form.cpa_ws_write_timeout_seconds, 300),
+      cpa_ws_prewarm_cooldown_ms: cpaWSNumberOrDefault(form.cpa_ws_prewarm_cooldown_ms, 0),
+      cpa_ws_retry_backoff_initial_ms: cpaWSNumberOrDefault(form.cpa_ws_retry_backoff_initial_ms, 0),
+      cpa_ws_retry_backoff_max_ms: cpaWSNumberOrDefault(form.cpa_ws_retry_backoff_max_ms, 0),
+      cpa_ws_retry_jitter_ratio: cpaWSNumberOrDefault(form.cpa_ws_retry_jitter_ratio, 0),
+      cpa_ws_retry_total_budget_ms: cpaWSNumberOrDefault(form.cpa_ws_retry_total_budget_ms, 0),
+      cpa_ws_event_flush_batch_size: cpaWSNumberOrDefault(form.cpa_ws_event_flush_batch_size, 1),
+      cpa_ws_event_flush_interval_ms: cpaWSNumberOrDefault(form.cpa_ws_event_flush_interval_ms, 0),
       // 余额、订阅到期与账号限额通知
       balance_low_notify_enabled: form.balance_low_notify_enabled,
       balance_low_notify_threshold:

@@ -864,3 +864,17 @@ func stringSetting(value *string, fallback string) string {
 	}
 	return *value
 }
+
+func intSetting(value *int, fallback int) int {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func floatSetting(value *float64, fallback float64) float64 {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}

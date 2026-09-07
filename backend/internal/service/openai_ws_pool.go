@@ -77,9 +77,24 @@ type openAIWSAcquireRequest struct {
 	ForceNewConn bool
 	// ForcePreferredConn: 强制本次只使用 PreferredConnID，禁止漂移到其它连接。
 	ForcePreferredConn bool
+	// StrictTargetIsolation is used by the CPA profile to prevent a pooled
+	// connection created through another WS/proxy target from being reused.
+	StrictTargetIsolation bool
+	// SharedHandshakeCompatibility lets CPA's stateless pool reuse hot slots
+	// across conversations. Account, target, proxy, and PoolAffinity remain
+	// isolated; request-scoped session headers do not fragment the pool.
+	SharedHandshakeCompatibility bool
+	// AllowOverflowConn treats MaxConnsPerAccount as the reusable slot limit.
+	// When every CPA slot is busy, the request dials a one-shot connection
+	// instead of queueing behind a long-running generation.
+	AllowOverflowConn bool
+	// PoolAffinity is an internal stable execution-route key. It is never sent
+	// to OpenAI; CPA uses it to keep the same cache/session route warm.
+	PoolAffinity string
 }
 
 type openAIWSHandshakeCompatibilityKey struct {
+	poolAffinity        string
 	betaFeatures        string
 	codexInstallationID string
 	sessionIDHyphen     string
@@ -96,7 +111,9 @@ type openAIWSConnLease struct {
 	queueWait time.Duration
 	connPick  time.Duration
 	reused    bool
+	ephemeral bool
 	released  atomic.Bool
+	broken    atomic.Bool
 }
 
 func (l *openAIWSConnLease) activeConn() (*openAIWSConn, error) {
@@ -163,6 +180,16 @@ func (l *openAIWSConnLease) MarkPrewarmed() {
 		return
 	}
 	l.conn.markPrewarmed()
+}
+
+// NotifyFirstUpstreamEvent starts CPA standby growth only after the active
+// request has received an upstream event, so cold dials do not compete with
+// its time-to-first-token path.
+func (l *openAIWSConnLease) NotifyFirstUpstreamEvent() {
+	if l == nil || l.pool == nil || !l.pool.cpaProfile || l.accountID <= 0 {
+		return
+	}
+	l.pool.ensureTargetIdleAsync(l.accountID)
 }
 
 func (l *openAIWSConnLease) WriteJSON(value any, timeout time.Duration) error {
@@ -233,6 +260,11 @@ func (l *openAIWSConnLease) MarkBroken() {
 	if l == nil || l.pool == nil || l.conn == nil || l.released.Load() {
 		return
 	}
+	l.broken.Store(true)
+	if l.ephemeral {
+		l.conn.close()
+		return
+	}
 	l.pool.evictConn(l.accountID, l.conn.id)
 }
 
@@ -241,6 +273,20 @@ func (l *openAIWSConnLease) Release() {
 		return
 	}
 	if !l.released.CompareAndSwap(false, true) {
+		return
+	}
+	if l.ephemeral {
+		l.conn.close()
+		return
+	}
+	if l.pool != nil && l.pool.closing.Load() {
+		l.pool.evictConn(l.accountID, l.conn.id)
+		return
+	}
+	if !l.broken.Load() && l.pool != nil && l.pool.shouldRotateAfterRequest(l.conn) {
+		l.pool.evictConn(l.accountID, l.conn.id)
+		l.pool.metrics.requestRotationTotal.Add(1)
+		l.pool.ensureTargetIdleAsync(l.accountID)
 		return
 	}
 	l.conn.release()
@@ -256,18 +302,30 @@ type openAIWSConn struct {
 	handshakeHeaders       http.Header
 	handshakeCompatibility openAIWSHandshakeCompatibilityKey
 	routingAffinity        string
+	poolAffinity           string
+	wsURL                  string
+	proxyURL               string
 
 	leaseCh   chan struct{}
 	closedCh  chan struct{}
 	closeOnce sync.Once
 
-	readMu  sync.Mutex
-	writeMu sync.Mutex
+	readMu       sync.Mutex
+	writeMu      sync.Mutex
+	readPumpOnce sync.Once
+	readPumpOn   atomic.Bool
+	readPumpCh   chan openAIWSReadResult
 
-	waiters       atomic.Int32
-	createdAtNano atomic.Int64
-	lastUsedNano  atomic.Int64
-	prewarmed     atomic.Bool
+	waiters           atomic.Int32
+	createdAtNano     atomic.Int64
+	lastUsedNano      atomic.Int64
+	prewarmed         atomic.Bool
+	completedRequests atomic.Uint64
+}
+
+type openAIWSReadResult struct {
+	payload []byte
+	err     error
 }
 
 func newOpenAIWSConn(id string, _ int64, ws openAIWSClientConn, handshakeHeaders http.Header) *openAIWSConn {
@@ -278,11 +336,39 @@ func newOpenAIWSConn(id string, _ int64, ws openAIWSClientConn, handshakeHeaders
 		handshakeHeaders: cloneHeader(handshakeHeaders),
 		leaseCh:          make(chan struct{}, 1),
 		closedCh:         make(chan struct{}),
+		readPumpCh:       make(chan openAIWSReadResult, 256),
 	}
 	conn.leaseCh <- struct{}{}
 	conn.createdAtNano.Store(now.UnixNano())
 	conn.lastUsedNano.Store(now.UnixNano())
 	return conn
+}
+
+func (c *openAIWSConn) enableReadPump() {
+	if c == nil || c.ws == nil {
+		return
+	}
+	c.readPumpOnce.Do(func() {
+		c.readPumpOn.Store(true)
+		go c.runReadPump()
+	})
+}
+
+func (c *openAIWSConn) runReadPump() {
+	defer close(c.readPumpCh)
+	for {
+		payload, err := c.ws.ReadMessage(context.Background())
+		result := openAIWSReadResult{payload: payload, err: err}
+		select {
+		case c.readPumpCh <- result:
+		case <-c.closedCh:
+			return
+		}
+		if err != nil {
+			c.close()
+			return
+		}
+	}
 }
 
 func (c *openAIWSConn) tryAcquire() bool {
@@ -430,6 +516,23 @@ func (c *openAIWSConn) readMessageWithContextTimeout(parent context.Context, tim
 }
 
 func (c *openAIWSConn) readMessage(readCtx context.Context) ([]byte, error) {
+	if c != nil && c.readPumpOn.Load() {
+		if readCtx == nil {
+			readCtx = context.Background()
+		}
+		select {
+		case <-readCtx.Done():
+			return nil, readCtx.Err()
+		case result, ok := <-c.readPumpCh:
+			if !ok {
+				return nil, errOpenAIWSConnClosed
+			}
+			if result.err == nil {
+				c.touch()
+			}
+			return result.payload, result.err
+		}
+	}
 	c.readMu.Lock()
 	defer c.readMu.Unlock()
 	if c.ws == nil {
@@ -475,6 +578,9 @@ func (c *openAIWSConn) pingWithTimeout(timeout time.Duration) error {
 func (c *openAIWSConn) supportsIdlePingWithoutReader() bool {
 	if c == nil || c.ws == nil {
 		return false
+	}
+	if c.readPumpOn.Load() {
+		return true
 	}
 	capable, ok := c.ws.(openAIWSIdlePingCapable)
 	// Test and alternate implementations keep the historical probe behavior
@@ -551,6 +657,14 @@ func (c *openAIWSConn) matchesHandshakeCompatibility(compatibility openAIWSHands
 	return c != nil && c.handshakeCompatibility == compatibility
 }
 
+func (c *openAIWSConn) matchesTarget(wsURL, proxyURL string) bool {
+	return c != nil && stringsTrim(c.wsURL) == stringsTrim(wsURL) && stringsTrim(c.proxyURL) == stringsTrim(proxyURL)
+}
+
+func (c *openAIWSConn) matchesPoolAffinity(affinity string) bool {
+	return c != nil && stringsTrim(affinity) != "" && c.poolAffinity == stringsTrim(affinity)
+}
+
 func (c *openAIWSConn) matchesRoutingAffinity(routingAffinity string) bool {
 	return c != nil && c.routingAffinity == routingAffinity
 }
@@ -611,6 +725,7 @@ type OpenAIWSPoolMetricsSnapshot struct {
 	ConnPickMsTotal         int64
 	ScaleUpTotal            int64
 	ScaleDownTotal          int64
+	RequestRotationTotal    int64
 }
 
 type openAIWSPoolMetrics struct {
@@ -623,6 +738,7 @@ type openAIWSPoolMetrics struct {
 	connPickMs            atomic.Int64
 	scaleUpTotal          atomic.Int64
 	scaleDownTotal        atomic.Int64
+	requestRotationTotal  atomic.Int64
 }
 
 type openAIWSConnPool struct {
@@ -630,13 +746,15 @@ type openAIWSConnPool struct {
 	// 通过接口解耦底层 WS 客户端实现，默认使用 coder/websocket。
 	clientDialer openAIWSClientDialer
 
-	accounts sync.Map // key: int64(accountID), value: *openAIWSAccountPool
-	seq      atomic.Uint64
+	accounts   sync.Map // key: int64(accountID), value: *openAIWSAccountPool
+	seq        atomic.Uint64
+	cpaProfile bool
 
 	metrics openAIWSPoolMetrics
 
 	workerStopCh chan struct{}
 	workerWg     sync.WaitGroup
+	closing      atomic.Bool
 	closeOnce    sync.Once
 }
 
@@ -664,6 +782,7 @@ func (p *openAIWSConnPool) SnapshotMetrics() OpenAIWSPoolMetricsSnapshot {
 		ConnPickMsTotal:         p.metrics.connPickMs.Load(),
 		ScaleUpTotal:            p.metrics.scaleUpTotal.Load(),
 		ScaleDownTotal:          p.metrics.scaleDownTotal.Load(),
+		RequestRotationTotal:    p.metrics.requestRotationTotal.Load(),
 	}
 }
 
@@ -690,6 +809,7 @@ func (p *openAIWSConnPool) Close() {
 		return
 	}
 	p.closeOnce.Do(func() {
+		p.closing.Store(true)
 		if p.workerStopCh != nil {
 			close(p.workerStopCh)
 		}
@@ -848,6 +968,9 @@ func (p *openAIWSConnPool) runBackgroundCleanupSweep(now time.Time) {
 }
 
 func (p *openAIWSConnPool) Acquire(ctx context.Context, req openAIWSAcquireRequest) (*openAIWSConnLease, error) {
+	if p == nil || p.closing.Load() {
+		return nil, errOpenAIWSConnClosed
+	}
 	if p != nil {
 		p.metrics.acquireTotal.Add(1)
 	}
@@ -864,8 +987,10 @@ func (p *openAIWSConnPool) acquire(ctx context.Context, req openAIWSAcquireReque
 
 retryAcquire:
 	accountID := req.Account.ID
-	compatibility := normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
+	compatibility := normalizeOpenAIWSAcquireCompatibility(req)
 	routingAffinity := normalizeOpenAIWSRoutingAffinity(req.Headers)
+	targetWSURL := stringsTrim(req.WSURL)
+	targetProxyURL := stringsTrim(req.ProxyURL)
 	effectiveMaxConns := p.effectiveMaxConnsByAccount(req.Account)
 	if effectiveMaxConns <= 0 {
 		return nil, errOpenAIWSConnQueueFull
@@ -893,7 +1018,7 @@ retryAcquire:
 				return nil, errOpenAIWSPreferredConnUnavailable
 			}
 			preferredConn, ok := ap.conns[preferredConnID]
-			if !ok || !preferredConn.matchesHandshakeCompatibility(compatibility) {
+			if !ok || !preferredConn.matchesHandshakeCompatibility(compatibility) || (req.StrictTargetIsolation && !preferredConn.matchesTarget(targetWSURL, targetProxyURL)) {
 				p.recordConnPickDuration(time.Since(pickStartedAt))
 				ap.mu.Unlock()
 				closeOpenAIWSConns(evicted)
@@ -923,7 +1048,7 @@ retryAcquire:
 				}
 				p.metrics.acquireReuseTotal.Add(1)
 				p.recordLastSuccessfulAcquire(accountID, acquireGeneration, req)
-				p.ensureTargetIdleAsync(accountID)
+				p.ensureTargetIdleAfterAcquire(accountID)
 				return lease, nil
 			}
 
@@ -971,12 +1096,12 @@ retryAcquire:
 			}
 			p.metrics.acquireReuseTotal.Add(1)
 			p.recordLastSuccessfulAcquire(accountID, acquireGeneration, req)
-			p.ensureTargetIdleAsync(accountID)
+			p.ensureTargetIdleAfterAcquire(accountID)
 			return lease, nil
 		}
 
 		if preferredConnID != "" {
-			if conn, ok := ap.conns[preferredConnID]; ok && conn.matchesHandshakeCompatibility(compatibility) && conn.tryAcquire() {
+			if conn, ok := ap.conns[preferredConnID]; ok && conn.matchesHandshakeCompatibility(compatibility) && (!req.StrictTargetIsolation || conn.matchesTarget(targetWSURL, targetProxyURL)) && conn.tryAcquire() {
 				connPick := time.Since(pickStartedAt)
 				p.recordConnPickDuration(connPick)
 				ap.mu.Unlock()
@@ -994,7 +1119,21 @@ retryAcquire:
 				lease := &openAIWSConnLease{pool: p, accountID: accountID, conn: conn, connPick: connPick, reused: true}
 				p.metrics.acquireReuseTotal.Add(1)
 				p.recordLastSuccessfulAcquire(accountID, acquireGeneration, req)
-				p.ensureTargetIdleAsync(accountID)
+				p.ensureTargetIdleAfterAcquire(accountID)
+				return lease, nil
+			}
+		}
+		if req.PoolAffinity != "" {
+			affinityConn := p.pickLeastBusyConnWithPoolAffinityLocked(ap, compatibility, req.PoolAffinity, targetWSURL, targetProxyURL, req.StrictTargetIsolation)
+			if affinityConn != nil && affinityConn.tryAcquire() {
+				connPick := time.Since(pickStartedAt)
+				p.recordConnPickDuration(connPick)
+				ap.mu.Unlock()
+				closeOpenAIWSConns(evicted)
+				lease := &openAIWSConnLease{pool: p, accountID: accountID, conn: affinityConn, connPick: connPick, reused: true}
+				p.metrics.acquireReuseTotal.Add(1)
+				p.recordLastSuccessfulAcquire(accountID, acquireGeneration, req)
+				p.ensureTargetIdleAfterAcquire(accountID)
 				return lease, nil
 			}
 		}
@@ -1003,6 +1142,9 @@ retryAcquire:
 		// connection whose handshake used the same hint, but do not make that
 		// preference a continuation compatibility requirement.
 		best := p.pickLeastBusyConnWithRoutingAffinityLocked(ap, compatibility, routingAffinity)
+		if req.StrictTargetIsolation && best != nil && !best.matchesTarget(targetWSURL, targetProxyURL) {
+			best = p.pickLeastBusyConnWithTargetLocked(ap, compatibility, routingAffinity, targetWSURL, targetProxyURL)
+		}
 		if best != nil && best.tryAcquire() {
 			connPick := time.Since(pickStartedAt)
 			p.recordConnPickDuration(connPick)
@@ -1021,12 +1163,12 @@ retryAcquire:
 			lease := &openAIWSConnLease{pool: p, accountID: accountID, conn: best, connPick: connPick, reused: true}
 			p.metrics.acquireReuseTotal.Add(1)
 			p.recordLastSuccessfulAcquire(accountID, acquireGeneration, req)
-			p.ensureTargetIdleAsync(accountID)
+			p.ensureTargetIdleAfterAcquire(accountID)
 			return lease, nil
 		}
 		if routingAffinity == "" || len(ap.conns)+ap.creating >= effectiveMaxConns {
 			for _, conn := range ap.conns {
-				if conn == nil || conn == best || !conn.matchesHandshakeCompatibility(compatibility) {
+				if conn == nil || conn == best || !conn.matchesHandshakeCompatibility(compatibility) || (req.StrictTargetIsolation && !conn.matchesTarget(targetWSURL, targetProxyURL)) {
 					continue
 				}
 				if conn.tryAcquire() {
@@ -1047,7 +1189,7 @@ retryAcquire:
 					lease := &openAIWSConnLease{pool: p, accountID: accountID, conn: conn, connPick: connPick, reused: true}
 					p.metrics.acquireReuseTotal.Add(1)
 					p.recordLastSuccessfulAcquire(accountID, acquireGeneration, req)
-					p.ensureTargetIdleAsync(accountID)
+					p.ensureTargetIdleAfterAcquire(accountID)
 					return lease, nil
 				}
 			}
@@ -1065,6 +1207,9 @@ retryAcquire:
 			if compatible != nil {
 				// Capacity is full and every compatible connection is busy. The
 				// hint remains soft here: queue on a compatible connection below.
+				goto acquireAtCapacity
+			}
+			if req.AllowOverflowConn {
 				goto acquireAtCapacity
 			}
 			hasConnection := false
@@ -1149,7 +1294,7 @@ retryAcquire:
 		p.metrics.acquireCreateTotal.Add(1)
 		lease := &openAIWSConnLease{pool: p, accountID: accountID, conn: conn, connPick: connPick}
 		p.recordLastSuccessfulAcquire(accountID, acquireGeneration, req)
-		p.ensureTargetIdleAsync(accountID)
+		p.ensureTargetIdleAfterAcquire(accountID)
 		return lease, nil
 	}
 
@@ -1161,7 +1306,40 @@ retryAcquire:
 	}
 
 acquireAtCapacity:
-	target := p.pickLeastBusyConnLocked(ap, req.PreferredConnID, compatibility)
+	if req.AllowOverflowConn {
+		connPick := time.Since(pickStartedAt)
+		p.recordConnPickDuration(connPick)
+		ap.mu.Unlock()
+		closeOpenAIWSConns(evicted)
+		conn, dialErr := p.dialConn(ctx, req)
+		if dialErr != nil {
+			return nil, dialErr
+		}
+		if conn == nil || !conn.tryAcquire() {
+			if conn != nil {
+				conn.close()
+			}
+			return nil, errOpenAIWSConnClosed
+		}
+		p.metrics.acquireCreateTotal.Add(1)
+		return &openAIWSConnLease{
+			pool:      p,
+			accountID: accountID,
+			conn:      conn,
+			connPick:  connPick,
+			ephemeral: true,
+		}, nil
+	}
+	var target *openAIWSConn
+	if req.PoolAffinity != "" {
+		target = p.pickLeastBusyConnWithPoolAffinityLocked(ap, compatibility, req.PoolAffinity, targetWSURL, targetProxyURL, req.StrictTargetIsolation)
+	}
+	if target == nil {
+		target = p.pickLeastBusyConnLocked(ap, req.PreferredConnID, compatibility)
+		if req.StrictTargetIsolation && target != nil && !target.matchesTarget(targetWSURL, targetProxyURL) {
+			target = p.pickLeastBusyConnWithTargetLocked(ap, compatibility, "", targetWSURL, targetProxyURL)
+		}
+	}
 	connPick := time.Since(pickStartedAt)
 	p.recordConnPickDuration(connPick)
 	if target == nil {
@@ -1204,7 +1382,7 @@ acquireAtCapacity:
 	lease := &openAIWSConnLease{pool: p, accountID: accountID, conn: target, queueWait: queueWait, connPick: connPick, reused: true}
 	p.metrics.acquireReuseTotal.Add(1)
 	p.recordLastSuccessfulAcquire(accountID, acquireGeneration, req)
-	p.ensureTargetIdleAsync(accountID)
+	p.ensureTargetIdleAfterAcquire(accountID)
 	return lease, nil
 }
 
@@ -1489,6 +1667,61 @@ func (p *openAIWSConnPool) pickLeastBusyConnWithRoutingAffinityLocked(
 	return best
 }
 
+func (p *openAIWSConnPool) pickLeastBusyConnWithTargetLocked(
+	ap *openAIWSAccountPool,
+	compatibility openAIWSHandshakeCompatibilityKey,
+	routingAffinity, wsURL, proxyURL string,
+) *openAIWSConn {
+	if ap == nil {
+		return nil
+	}
+	var best *openAIWSConn
+	var bestWaiters int32
+	var bestLastUsed time.Time
+	for _, conn := range ap.conns {
+		if conn == nil || !conn.matchesHandshakeCompatibility(compatibility) || !conn.matchesTarget(wsURL, proxyURL) {
+			continue
+		}
+		if routingAffinity != "" && conn.routingAffinity != routingAffinity {
+			continue
+		}
+		waiters := conn.waiters.Load()
+		lastUsed := conn.lastUsedAt()
+		if best == nil || waiters < bestWaiters || (waiters == bestWaiters && lastUsed.Before(bestLastUsed)) {
+			best, bestWaiters, bestLastUsed = conn, waiters, lastUsed
+		}
+	}
+	return best
+}
+
+func (p *openAIWSConnPool) pickLeastBusyConnWithPoolAffinityLocked(
+	ap *openAIWSAccountPool,
+	compatibility openAIWSHandshakeCompatibilityKey,
+	affinity, wsURL, proxyURL string,
+	strictTarget bool,
+) *openAIWSConn {
+	if ap == nil {
+		return nil
+	}
+	var best *openAIWSConn
+	var bestWaiters int32
+	var bestLastUsed time.Time
+	for _, conn := range ap.conns {
+		if conn == nil || !conn.matchesHandshakeCompatibility(compatibility) || !conn.matchesPoolAffinity(affinity) {
+			continue
+		}
+		if strictTarget && !conn.matchesTarget(wsURL, proxyURL) {
+			continue
+		}
+		waiters := conn.waiters.Load()
+		lastUsed := conn.lastUsedAt()
+		if best == nil || waiters < bestWaiters || (waiters == bestWaiters && lastUsed.Before(bestLastUsed)) {
+			best, bestWaiters, bestLastUsed = conn, waiters, lastUsed
+		}
+	}
+	return best
+}
+
 func accountPoolLoadLocked(ap *openAIWSAccountPool) (inflight int, waiters int) {
 	if ap == nil {
 		return 0, 0
@@ -1572,6 +1805,13 @@ func (p *openAIWSConnPool) ensureTargetIdleAsync(accountID int64) {
 	go p.prewarmConns(accountID, req, need, generation)
 }
 
+func (p *openAIWSConnPool) ensureTargetIdleAfterAcquire(accountID int64) {
+	if p == nil || p.cpaProfile {
+		return
+	}
+	p.ensureTargetIdleAsync(accountID)
+}
+
 func (p *openAIWSConnPool) targetConnCountLocked(ap *openAIWSAccountPool, maxConns int) int {
 	if ap == nil {
 		return 0
@@ -1603,6 +1843,14 @@ func (p *openAIWSConnPool) targetConnCountLocked(ap *openAIWSAccountPool, maxCon
 	if waiters > 0 && target < len(ap.conns)+1 {
 		target = len(ap.conns) + 1
 	}
+	if p.cpaProfile {
+		// CPA keeps standby slots in addition to the connections serving current
+		// demand. With the default value this means one active + three hot slots.
+		standbyTarget := demand + minIdle
+		if standbyTarget > target {
+			target = standbyTarget
+		}
+	}
 	if target < minIdle {
 		target = minIdle
 	}
@@ -1613,11 +1861,14 @@ func (p *openAIWSConnPool) targetConnCountLocked(ap *openAIWSAccountPool, maxCon
 }
 
 func (p *openAIWSConnPool) prewarmConns(accountID int64, req openAIWSAcquireRequest, total int, generations ...uint64) {
+	if total <= 0 {
+		return
+	}
 	generation := uint64(0)
 	if len(generations) > 0 {
 		generation = generations[0]
 	}
-	staleTarget := false
+	var staleTarget atomic.Bool
 	defer func() {
 		if ap, ok := p.getAccountPool(accountID); ok && ap != nil {
 			ap.mu.Lock()
@@ -1625,7 +1876,7 @@ func (p *openAIWSConnPool) prewarmConns(accountID int64, req openAIWSAcquireRequ
 			ap.signalChangedLocked()
 			ap.mu.Unlock()
 		}
-		if staleTarget {
+		if staleTarget.Load() {
 			// A newer acquire arrived while the old dial was in flight. Re-run
 			// target selection only after clearing prewarmActive so the latest
 			// beta/hint target can fill the idle budget.
@@ -1633,53 +1884,69 @@ func (p *openAIWSConnPool) prewarmConns(accountID int64, req openAIWSAcquireRequ
 		}
 	}()
 
-	for i := 0; i < total; i++ {
-		ctx, cancel := context.WithTimeout(context.Background(), p.dialTimeout()+openAIWSConnPrewarmExtraDelay)
-		conn, err := p.dialConn(ctx, req)
-		cancel()
-
-		ap, ok := p.getAccountPool(accountID)
-		if !ok || ap == nil {
-			if conn != nil {
-				conn.close()
-			}
-			return
+	var g errgroup.Group
+	parallelism := 1
+	if p.cpaProfile {
+		parallelism = p.minIdlePerAccount()
+		if parallelism < 1 {
+			parallelism = 1
 		}
-		ap.mu.Lock()
-		if ap.creating > 0 {
-			ap.creating--
-		}
-		if err != nil {
-			ap.prewarmFails++
-			ap.prewarmFailAt = time.Now()
-			ap.signalChangedLocked()
-			ap.mu.Unlock()
-			continue
-		}
-		if ap.generation != generation || ap.lastAcquire == nil {
-			ap.mu.Unlock()
-			conn.close()
-			continue
-		}
-		if !sameOpenAIWSPrewarmTarget(req, *ap.lastAcquire) {
-			staleTarget = true
-			ap.signalChangedLocked()
-			ap.mu.Unlock()
-			conn.close()
-			continue
-		}
-		if len(ap.conns) >= p.effectiveMaxConnsByAccount(req.Account) {
-			ap.signalChangedLocked()
-			ap.mu.Unlock()
-			conn.close()
-			continue
-		}
-		ap.conns[conn.id] = conn
-		ap.prewarmFails = 0
-		ap.prewarmFailAt = time.Time{}
-		ap.signalChangedLocked()
-		ap.mu.Unlock()
 	}
+	if parallelism > total {
+		parallelism = total
+	}
+	g.SetLimit(parallelism)
+	for i := 0; i < total; i++ {
+		g.Go(func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), p.dialTimeout()+openAIWSConnPrewarmExtraDelay)
+			conn, err := p.dialConn(ctx, req)
+			cancel()
+
+			ap, ok := p.getAccountPool(accountID)
+			if !ok || ap == nil {
+				if conn != nil {
+					conn.close()
+				}
+				return nil
+			}
+			ap.mu.Lock()
+			if ap.creating > 0 {
+				ap.creating--
+			}
+			if err != nil {
+				ap.prewarmFails++
+				ap.prewarmFailAt = time.Now()
+				ap.signalChangedLocked()
+				ap.mu.Unlock()
+				return nil
+			}
+			if ap.generation != generation || ap.lastAcquire == nil {
+				ap.mu.Unlock()
+				conn.close()
+				return nil
+			}
+			if !sameOpenAIWSPrewarmTarget(req, *ap.lastAcquire) {
+				staleTarget.Store(true)
+				ap.signalChangedLocked()
+				ap.mu.Unlock()
+				conn.close()
+				return nil
+			}
+			if len(ap.conns) >= p.effectiveMaxConnsByAccount(req.Account) {
+				ap.signalChangedLocked()
+				ap.mu.Unlock()
+				conn.close()
+				return nil
+			}
+			ap.conns[conn.id] = conn
+			ap.prewarmFails = 0
+			ap.prewarmFailAt = time.Time{}
+			ap.signalChangedLocked()
+			ap.mu.Unlock()
+			return nil
+		})
+	}
+	_ = g.Wait()
 }
 
 // ClearAccount closes all pooled connections and discards delayed prewarm
@@ -1821,8 +2088,14 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	}
 	id := p.nextConnID(req.Account.ID)
 	pooledConn := newOpenAIWSConn(id, req.Account.ID, conn, handshakeHeaders)
-	pooledConn.handshakeCompatibility = normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
+	if p.cpaProfile {
+		pooledConn.enableReadPump()
+	}
+	pooledConn.handshakeCompatibility = normalizeOpenAIWSAcquireCompatibility(req)
 	pooledConn.routingAffinity = normalizeOpenAIWSRoutingAffinity(req.Headers)
+	pooledConn.poolAffinity = stringsTrim(req.PoolAffinity)
+	pooledConn.wsURL = stringsTrim(req.WSURL)
+	pooledConn.proxyURL = stringsTrim(req.ProxyURL)
 	return pooledConn, nil
 }
 
@@ -1931,7 +2204,28 @@ func (p *openAIWSConnPool) maxIdlePerAccount() int {
 }
 
 func (p *openAIWSConnPool) maxConnAge() time.Duration {
+	if p != nil && p.cfg != nil && p.cfg.Gateway.OpenAIWS.MaxConnAgeSeconds > 0 {
+		return time.Duration(p.cfg.Gateway.OpenAIWS.MaxConnAgeSeconds) * time.Second
+	}
 	return openAIWSConnMaxAge
+}
+
+func (p *openAIWSConnPool) maxRequestsPerConn() uint64 {
+	if p != nil && p.cfg != nil && p.cfg.Gateway.OpenAIWS.MaxRequestsPerConn > 0 {
+		return uint64(p.cfg.Gateway.OpenAIWS.MaxRequestsPerConn)
+	}
+	return 0
+}
+
+func (p *openAIWSConnPool) shouldRotateAfterRequest(conn *openAIWSConn) bool {
+	if p == nil || conn == nil {
+		return false
+	}
+	limit := p.maxRequestsPerConn()
+	if limit == 0 {
+		return false
+	}
+	return conn.completedRequests.Add(1) >= limit
 }
 
 func (p *openAIWSConnPool) queueLimitPerConn() int {
@@ -1990,7 +2284,15 @@ func cloneOpenAIWSAcquireRequest(req openAIWSAcquireRequest) openAIWSAcquireRequ
 	copied.WSURL = stringsTrim(req.WSURL)
 	copied.ProxyURL = stringsTrim(req.ProxyURL)
 	copied.PreferredConnID = stringsTrim(req.PreferredConnID)
+	copied.PoolAffinity = stringsTrim(req.PoolAffinity)
 	return copied
+}
+
+func normalizeOpenAIWSAcquireCompatibility(req openAIWSAcquireRequest) openAIWSHandshakeCompatibilityKey {
+	if req.SharedHandshakeCompatibility {
+		return openAIWSHandshakeCompatibilityKey{poolAffinity: stringsTrim(req.PoolAffinity)}
+	}
+	return normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
 }
 
 func cloneOpenAIWSAcquireRequestPtr(req *openAIWSAcquireRequest) *openAIWSAcquireRequest {
@@ -2004,7 +2306,7 @@ func cloneOpenAIWSAcquireRequestPtr(req *openAIWSAcquireRequest) *openAIWSAcquir
 func sameOpenAIWSPrewarmTarget(a, b openAIWSAcquireRequest) bool {
 	return stringsTrim(a.WSURL) == stringsTrim(b.WSURL) &&
 		stringsTrim(a.ProxyURL) == stringsTrim(b.ProxyURL) &&
-		normalizeOpenAIWSHandshakeCompatibility(a.Account, a.Headers) == normalizeOpenAIWSHandshakeCompatibility(b.Account, b.Headers)
+		normalizeOpenAIWSAcquireCompatibility(a) == normalizeOpenAIWSAcquireCompatibility(b)
 }
 
 func normalizeOpenAIWSBetaFeatures(headers http.Header) string {

@@ -248,7 +248,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// converting the WS Responses event stream back to Chat Completions below.
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
 	wsDecision = resolveOpenAIWSDecisionForRequest(wsDecision, OpenAIClientTransportHTTP, account, false)
-	if wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 {
+	if isOpenAIResponsesWebsocketTransport(wsDecision.Transport) {
 		responsesBody, err = sjson.SetBytes(responsesBody, "stream", true)
 		if err != nil {
 			return nil, fmt.Errorf("force streaming responses body for websocket bridge: %w", err)

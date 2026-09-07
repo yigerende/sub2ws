@@ -220,7 +220,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		c.Set("openai_ws_transport_decision", string(wsDecision.Transport))
 		c.Set("openai_ws_transport_reason", wsDecision.Reason)
 	}
-	if wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 {
+	if isOpenAIResponsesWebsocketTransport(wsDecision.Transport) {
 		logOpenAIWSModeDebug(
 			"selected account_id=%d account_type=%s transport=%s reason=%s model=%s stream=%v",
 			account.ID,
@@ -613,7 +613,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 		}
 	}
-	if wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 &&
+	if !isOpenAIResponsesWebsocketTransport(wsDecision.Transport) &&
 		!account.IsOpenAIApiKey() && gjson.GetBytes(body, "previous_response_id").Exists() {
 		markPatchDelete("previous_response_id")
 	}
@@ -762,7 +762,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	SetOpsUpstreamModel(c, upstreamModel)
 
 	// 命中 WS 时仅走 WebSocket Mode；不再自动回退 HTTP。
-	if wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 {
+	if isOpenAIResponsesWebsocketTransport(wsDecision.Transport) {
 		// WS 分支需要结构化 payload 与重连恢复，命中后再触发 full-map decode。
 		wsReqBody, err := ensureReqBody()
 		if err != nil {
@@ -858,7 +858,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			)
 			return true
 		}
-		retryBudget := s.openAIWSRetryTotalBudget()
+		retryBudget := s.openAIWSRetryTotalBudgetForDecision(wsDecision)
 		retryStartedAt := time.Now()
 	wsRetryLoop:
 		for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -904,7 +904,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				continue
 			}
 			if retryable && attempt < maxAttempts {
-				backoff := s.openAIWSRetryBackoff(attempt)
+				backoff := s.openAIWSRetryBackoffForDecision(wsDecision, attempt)
 				if retryBudget > 0 && time.Since(retryStartedAt)+backoff > retryBudget {
 					s.recordOpenAIWSRetryExhausted()
 					logOpenAIWSModeInfo(

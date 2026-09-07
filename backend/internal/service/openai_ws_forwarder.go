@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	coderws "github.com/coder/websocket"
 	"go.uber.org/zap"
@@ -281,6 +282,190 @@ func (s *OpenAIGatewayService) getOpenAIWSConnPool() *openAIWSConnPool {
 	return s.openaiWSPool
 }
 
+// getOpenAICPAWSConnPool returns the isolated CPA-style pool. It intentionally
+// has its own connection namespace and CPA-compatible pool profile so
+// enabling CPA WS on one account cannot change the existing Sub2API pool.
+func (s *OpenAIGatewayService) getOpenAICPAWSConnPool() *openAIWSConnPool {
+	if s == nil {
+		return nil
+	}
+	s.openaiCPAWSPoolMu.Lock()
+	defer s.openaiCPAWSPoolMu.Unlock()
+	if s.openaiCPAWSPool == nil {
+		cfg := s.cfg
+		if cfg != nil {
+			clone := *cfg
+			clone.Gateway = cfg.Gateway
+			clone.Gateway.OpenAIWS = cfg.Gateway.OpenAIWS
+			clone.Gateway.OpenAIWS.MaxConnsPerAccount = cpaWSDefaultMaxConnsPerAccount
+			clone.Gateway.OpenAIWS.MinIdlePerAccount = cpaWSDefaultMinIdlePerAccount
+			clone.Gateway.OpenAIWS.MaxIdlePerAccount = cpaWSDefaultMaxIdlePerAccount
+			clone.Gateway.OpenAIWS.QueueLimitPerConn = cpaWSDefaultQueueLimitPerConn
+			clone.Gateway.OpenAIWS.PoolTargetUtilization = cpaWSDefaultPoolTargetUtilization
+			clone.Gateway.OpenAIWS.MaxRequestsPerConn = cpaWSDefaultMaxRequestsPerConn
+			clone.Gateway.OpenAIWS.MaxConnAgeSeconds = cpaWSDefaultMaxConnAgeSeconds
+			clone.Gateway.OpenAIWS.DialTimeoutSeconds = cpaWSDefaultDialTimeoutSeconds
+			clone.Gateway.OpenAIWS.ReadTimeoutSeconds = cpaWSDefaultReadTimeoutSeconds
+			clone.Gateway.OpenAIWS.WriteTimeoutSeconds = cpaWSDefaultWriteTimeoutSeconds
+			clone.Gateway.OpenAIWS.PrewarmCooldownMS = cpaWSDefaultPrewarmCooldownMS
+			clone.Gateway.OpenAIWS.RetryBackoffInitialMS = cpaWSDefaultRetryBackoffInitialMS
+			clone.Gateway.OpenAIWS.RetryBackoffMaxMS = cpaWSDefaultRetryBackoffMaxMS
+			clone.Gateway.OpenAIWS.RetryJitterRatio = cpaWSDefaultRetryJitterRatio
+			clone.Gateway.OpenAIWS.RetryTotalBudgetMS = cpaWSDefaultRetryTotalBudgetMS
+			clone.Gateway.OpenAIWS.EventFlushBatchSize = cpaWSDefaultEventFlushBatchSize
+			clone.Gateway.OpenAIWS.EventFlushIntervalMS = cpaWSDefaultEventFlushIntervalMS
+			// Prefer persisted admin settings when available. The values are
+			// read once when the isolated CPA pool is created; changing them
+			// takes effect after the service restart/reload, while the ordinary
+			// Sub2API pool is never affected.
+			if s.settingService != nil {
+				if settings, err := s.settingService.GetAllSettings(context.Background()); err == nil && settings != nil {
+					clone.Gateway.OpenAIWS.MaxConnsPerAccount = settings.CPAWSMaxConnsPerAccount
+					clone.Gateway.OpenAIWS.MinIdlePerAccount = settings.CPAWSMinIdlePerAccount
+					clone.Gateway.OpenAIWS.MaxIdlePerAccount = settings.CPAWSMaxIdlePerAccount
+					clone.Gateway.OpenAIWS.QueueLimitPerConn = settings.CPAWSQueueLimitPerConn
+					clone.Gateway.OpenAIWS.PoolTargetUtilization = settings.CPAWSPoolTargetUtilization
+					clone.Gateway.OpenAIWS.MaxRequestsPerConn = settings.CPAWSMaxRequestsPerConn
+					clone.Gateway.OpenAIWS.MaxConnAgeSeconds = settings.CPAWSMaxConnAgeSeconds
+					clone.Gateway.OpenAIWS.DialTimeoutSeconds = settings.CPAWSDialTimeoutSeconds
+					clone.Gateway.OpenAIWS.ReadTimeoutSeconds = settings.CPAWSReadTimeoutSeconds
+					clone.Gateway.OpenAIWS.WriteTimeoutSeconds = settings.CPAWSWriteTimeoutSeconds
+					clone.Gateway.OpenAIWS.PrewarmCooldownMS = settings.CPAWSPrewarmCooldownMS
+					clone.Gateway.OpenAIWS.RetryBackoffInitialMS = settings.CPAWSRetryBackoffInitialMS
+					clone.Gateway.OpenAIWS.RetryBackoffMaxMS = settings.CPAWSRetryBackoffMaxMS
+					clone.Gateway.OpenAIWS.RetryJitterRatio = settings.CPAWSRetryJitterRatio
+					clone.Gateway.OpenAIWS.RetryTotalBudgetMS = settings.CPAWSRetryTotalBudgetMS
+					clone.Gateway.OpenAIWS.EventFlushBatchSize = settings.CPAWSEventFlushBatchSize
+					clone.Gateway.OpenAIWS.EventFlushIntervalMS = settings.CPAWSEventFlushIntervalMS
+				}
+			}
+			if clone.Gateway.OpenAIWS.MaxConnsPerAccount <= 0 {
+				clone.Gateway.OpenAIWS.MaxConnsPerAccount = cpaWSDefaultMaxConnsPerAccount
+			}
+			if clone.Gateway.OpenAIWS.MinIdlePerAccount < 0 {
+				clone.Gateway.OpenAIWS.MinIdlePerAccount = cpaWSDefaultMinIdlePerAccount
+			}
+			if clone.Gateway.OpenAIWS.MaxIdlePerAccount < 0 {
+				clone.Gateway.OpenAIWS.MaxIdlePerAccount = cpaWSDefaultMaxIdlePerAccount
+			}
+			if clone.Gateway.OpenAIWS.QueueLimitPerConn <= 0 {
+				clone.Gateway.OpenAIWS.QueueLimitPerConn = cpaWSDefaultQueueLimitPerConn
+			}
+			if clone.Gateway.OpenAIWS.PoolTargetUtilization <= 0 {
+				clone.Gateway.OpenAIWS.PoolTargetUtilization = cpaWSDefaultPoolTargetUtilization
+			}
+			if clone.Gateway.OpenAIWS.MaxRequestsPerConn <= 0 {
+				clone.Gateway.OpenAIWS.MaxRequestsPerConn = cpaWSDefaultMaxRequestsPerConn
+			}
+			if clone.Gateway.OpenAIWS.MaxConnAgeSeconds <= 0 {
+				clone.Gateway.OpenAIWS.MaxConnAgeSeconds = cpaWSDefaultMaxConnAgeSeconds
+			}
+			clone.Gateway.OpenAIWS.DynamicMaxConnsByAccountConcurrencyEnabled = false
+			cfg = &clone
+		}
+		s.openaiCPAWSPool = newOpenAIWSConnPool(cfg)
+		s.openaiCPAWSPool.cpaProfile = true
+	}
+	return s.openaiCPAWSPool
+}
+
+func (s *OpenAIGatewayService) reloadCPAWSConnPool() {
+	if s == nil || s.settingService == nil {
+		return
+	}
+	settings, err := s.settingService.GetAllSettings(context.Background())
+	if err != nil || settings == nil {
+		return
+	}
+	s.openaiCPAWSPoolMu.Lock()
+	old := s.openaiCPAWSPool
+	if old == nil || cpaWSPoolConfigMatchesSettings(old.cfg, settings) {
+		s.openaiCPAWSPoolMu.Unlock()
+		return
+	}
+	s.openaiCPAWSPool = nil
+	s.openaiCPAWSPoolMu.Unlock()
+	old.Close()
+}
+
+func cpaWSPoolConfigMatchesSettings(cfg *config.Config, settings *SystemSettings) bool {
+	if cfg == nil || settings == nil {
+		return false
+	}
+	ws := cfg.Gateway.OpenAIWS
+	return ws.MaxConnsPerAccount == settings.CPAWSMaxConnsPerAccount &&
+		ws.MinIdlePerAccount == settings.CPAWSMinIdlePerAccount &&
+		ws.MaxIdlePerAccount == settings.CPAWSMaxIdlePerAccount &&
+		ws.QueueLimitPerConn == settings.CPAWSQueueLimitPerConn &&
+		ws.PoolTargetUtilization == settings.CPAWSPoolTargetUtilization &&
+		ws.MaxRequestsPerConn == settings.CPAWSMaxRequestsPerConn &&
+		ws.MaxConnAgeSeconds == settings.CPAWSMaxConnAgeSeconds &&
+		ws.DialTimeoutSeconds == settings.CPAWSDialTimeoutSeconds &&
+		ws.ReadTimeoutSeconds == settings.CPAWSReadTimeoutSeconds &&
+		ws.WriteTimeoutSeconds == settings.CPAWSWriteTimeoutSeconds &&
+		ws.PrewarmCooldownMS == settings.CPAWSPrewarmCooldownMS &&
+		ws.RetryBackoffInitialMS == settings.CPAWSRetryBackoffInitialMS &&
+		ws.RetryBackoffMaxMS == settings.CPAWSRetryBackoffMaxMS &&
+		ws.RetryJitterRatio == settings.CPAWSRetryJitterRatio &&
+		ws.RetryTotalBudgetMS == settings.CPAWSRetryTotalBudgetMS &&
+		ws.EventFlushBatchSize == settings.CPAWSEventFlushBatchSize &&
+		ws.EventFlushIntervalMS == settings.CPAWSEventFlushIntervalMS
+}
+
+func (s *OpenAIGatewayService) getOpenAIWSPoolForDecision(decision OpenAIWSProtocolDecision) *openAIWSConnPool {
+	if decision.Transport == OpenAIUpstreamTransportResponsesWebsocketCPA {
+		return s.getOpenAICPAWSConnPool()
+	}
+	return s.getOpenAIWSConnPool()
+}
+
+func (s *OpenAIGatewayService) openAIWSRuntimeConfigForDecision(decision OpenAIWSProtocolDecision) *config.Config {
+	if s == nil {
+		return nil
+	}
+	if decision.Transport == OpenAIUpstreamTransportResponsesWebsocketCPA {
+		if pool := s.getOpenAICPAWSConnPool(); pool != nil {
+			return pool.cfg
+		}
+	}
+	return s.cfg
+}
+
+func (s *OpenAIGatewayService) openAIWSReadTimeoutForDecision(decision OpenAIWSProtocolDecision) time.Duration {
+	if cfg := s.openAIWSRuntimeConfigForDecision(decision); cfg != nil && cfg.Gateway.OpenAIWS.ReadTimeoutSeconds > 0 {
+		return time.Duration(cfg.Gateway.OpenAIWS.ReadTimeoutSeconds) * time.Second
+	}
+	return s.openAIWSReadTimeout()
+}
+
+func (s *OpenAIGatewayService) openAIWSWriteTimeoutForDecision(decision OpenAIWSProtocolDecision) time.Duration {
+	if cfg := s.openAIWSRuntimeConfigForDecision(decision); cfg != nil && cfg.Gateway.OpenAIWS.WriteTimeoutSeconds > 0 {
+		return time.Duration(cfg.Gateway.OpenAIWS.WriteTimeoutSeconds) * time.Second
+	}
+	return s.openAIWSWriteTimeout()
+}
+
+func (s *OpenAIGatewayService) openAIWSAcquireTimeoutForDecision(decision OpenAIWSProtocolDecision) time.Duration {
+	if cfg := s.openAIWSRuntimeConfigForDecision(decision); cfg != nil && cfg.Gateway.OpenAIWS.DialTimeoutSeconds > 0 {
+		return time.Duration(cfg.Gateway.OpenAIWS.DialTimeoutSeconds)*time.Second + 2*time.Second
+	}
+	return s.openAIWSAcquireTimeout()
+}
+
+func (s *OpenAIGatewayService) openAIWSEventFlushBatchSizeForDecision(decision OpenAIWSProtocolDecision) int {
+	if cfg := s.openAIWSRuntimeConfigForDecision(decision); cfg != nil && cfg.Gateway.OpenAIWS.EventFlushBatchSize > 0 {
+		return cfg.Gateway.OpenAIWS.EventFlushBatchSize
+	}
+	return s.openAIWSEventFlushBatchSize()
+}
+
+func (s *OpenAIGatewayService) openAIWSEventFlushIntervalForDecision(decision OpenAIWSProtocolDecision) time.Duration {
+	if cfg := s.openAIWSRuntimeConfigForDecision(decision); cfg != nil && cfg.Gateway.OpenAIWS.EventFlushIntervalMS >= 0 {
+		return time.Duration(cfg.Gateway.OpenAIWS.EventFlushIntervalMS) * time.Millisecond
+	}
+	return s.openAIWSEventFlushInterval()
+}
+
 func (s *OpenAIGatewayService) getOpenAIWSPassthroughDialer() openAIWSClientDialer {
 	if s == nil {
 		return nil
@@ -302,21 +487,37 @@ func (s *OpenAIGatewayService) SnapshotOpenAIWSPoolMetrics() OpenAIWSPoolMetrics
 }
 
 type OpenAIWSPerformanceMetricsSnapshot struct {
-	Pool      OpenAIWSPoolMetricsSnapshot      `json:"pool"`
-	Retry     OpenAIWSRetryMetricsSnapshot     `json:"retry"`
-	Transport OpenAIWSTransportMetricsSnapshot `json:"transport"`
+	Pool             OpenAIWSPoolMetricsSnapshot           `json:"pool"`
+	Retry            OpenAIWSRetryMetricsSnapshot          `json:"retry"`
+	Transport        OpenAIWSTransportMetricsSnapshot      `json:"transport"`
+	CPAPool          OpenAIWSPoolMetricsSnapshot           `json:"cpa_pool"`
+	CPATransport     OpenAIWSTransportMetricsSnapshot      `json:"cpa_transport"`
+	CPACacheAffinity OpenAICPACacheAffinityMetricsSnapshot `json:"cpa_cache_affinity"`
 }
 
 func (s *OpenAIGatewayService) SnapshotOpenAIWSPerformanceMetrics() OpenAIWSPerformanceMetricsSnapshot {
+	if s == nil {
+		return OpenAIWSPerformanceMetricsSnapshot{}
+	}
 	pool := s.getOpenAIWSConnPool()
 	snapshot := OpenAIWSPerformanceMetricsSnapshot{
 		Retry: s.SnapshotOpenAIWSRetryMetrics(),
 	}
 	if pool == nil {
-		return snapshot
+		// CPAWS has an isolated pool and can be active even when the original
+		// Sub2API pool has never been initialized.
+	} else {
+		snapshot.Pool = pool.SnapshotMetrics()
+		snapshot.Transport = pool.SnapshotTransportMetrics()
 	}
-	snapshot.Pool = pool.SnapshotMetrics()
-	snapshot.Transport = pool.SnapshotTransportMetrics()
+	s.openaiCPAWSPoolMu.Lock()
+	cpaPool := s.openaiCPAWSPool
+	s.openaiCPAWSPoolMu.Unlock()
+	if cpaPool != nil {
+		snapshot.CPAPool = cpaPool.SnapshotMetrics()
+		snapshot.CPATransport = cpaPool.SnapshotTransportMetrics()
+	}
+	snapshot.CPACacheAffinity = s.SnapshotOpenAICPACacheAffinityMetrics()
 	return snapshot
 }
 

@@ -126,6 +126,20 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	if err := s.normalizeOpenAIAdvancedSchedulerOverrides(settings); err != nil {
 		return nil, err
 	}
+	if settings.CPAWSMaxConnsPerAccount < 1 || settings.CPAWSMaxConnsPerAccount > 1000 ||
+		settings.CPAWSMinIdlePerAccount < 0 || settings.CPAWSMaxIdlePerAccount < 0 ||
+		settings.CPAWSMinIdlePerAccount > settings.CPAWSMaxIdlePerAccount ||
+		settings.CPAWSMaxIdlePerAccount > settings.CPAWSMaxConnsPerAccount ||
+		settings.CPAWSMaxRequestsPerConn < 0 || settings.CPAWSMaxConnAgeSeconds < 1 ||
+		settings.CPAWSQueueLimitPerConn < 1 || settings.CPAWSDialTimeoutSeconds < 1 ||
+		settings.CPAWSReadTimeoutSeconds < 1 || settings.CPAWSWriteTimeoutSeconds < 1 ||
+		settings.CPAWSPrewarmCooldownMS < 0 || settings.CPAWSRetryBackoffInitialMS < 0 ||
+		settings.CPAWSRetryBackoffMaxMS < settings.CPAWSRetryBackoffInitialMS ||
+		settings.CPAWSRetryJitterRatio < 0 || settings.CPAWSRetryJitterRatio > 1 ||
+		settings.CPAWSRetryTotalBudgetMS < 0 || settings.CPAWSEventFlushBatchSize < 1 ||
+		settings.CPAWSEventFlushIntervalMS < 0 || settings.CPAWSPoolTargetUtilization <= 0 || settings.CPAWSPoolTargetUtilization > 1 {
+		return nil, infraerrors.BadRequest("INVALID_CPA_WS_SETTINGS", "CPA WS 参数超出有效范围")
+	}
 	settings.PaymentVisibleMethodAlipaySource = alipaySource
 	settings.PaymentVisibleMethodWxpaySource = wxpaySource
 	settings.WeChatConnectAppID = strings.TrimSpace(settings.WeChatConnectAppID)
@@ -510,6 +524,23 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightUpstreamCost] = settings.OpenAIAdvancedSchedulerWeightUpstreamCost
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightPreviousResponse] = settings.OpenAIAdvancedSchedulerWeightPreviousResponse
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky] = settings.OpenAIAdvancedSchedulerWeightSessionSticky
+	updates[SettingKeyCPAWSMaxConnsPerAccount] = strconv.Itoa(settings.CPAWSMaxConnsPerAccount)
+	updates[SettingKeyCPAWSMinIdlePerAccount] = strconv.Itoa(settings.CPAWSMinIdlePerAccount)
+	updates[SettingKeyCPAWSMaxIdlePerAccount] = strconv.Itoa(settings.CPAWSMaxIdlePerAccount)
+	updates[SettingKeyCPAWSQueueLimitPerConn] = strconv.Itoa(settings.CPAWSQueueLimitPerConn)
+	updates[SettingKeyCPAWSPoolTargetUtilization] = strconv.FormatFloat(settings.CPAWSPoolTargetUtilization, 'f', -1, 64)
+	updates[SettingKeyCPAWSMaxRequestsPerConn] = strconv.Itoa(settings.CPAWSMaxRequestsPerConn)
+	updates[SettingKeyCPAWSMaxConnAgeSeconds] = strconv.Itoa(settings.CPAWSMaxConnAgeSeconds)
+	updates[SettingKeyCPAWSDialTimeoutSeconds] = strconv.Itoa(settings.CPAWSDialTimeoutSeconds)
+	updates[SettingKeyCPAWSReadTimeoutSeconds] = strconv.Itoa(settings.CPAWSReadTimeoutSeconds)
+	updates[SettingKeyCPAWSWriteTimeoutSeconds] = strconv.Itoa(settings.CPAWSWriteTimeoutSeconds)
+	updates[SettingKeyCPAWSPrewarmCooldownMS] = strconv.Itoa(settings.CPAWSPrewarmCooldownMS)
+	updates[SettingKeyCPAWSRetryBackoffInitialMS] = strconv.Itoa(settings.CPAWSRetryBackoffInitialMS)
+	updates[SettingKeyCPAWSRetryBackoffMaxMS] = strconv.Itoa(settings.CPAWSRetryBackoffMaxMS)
+	updates[SettingKeyCPAWSRetryJitterRatio] = strconv.FormatFloat(settings.CPAWSRetryJitterRatio, 'f', -1, 64)
+	updates[SettingKeyCPAWSRetryTotalBudgetMS] = strconv.Itoa(settings.CPAWSRetryTotalBudgetMS)
+	updates[SettingKeyCPAWSEventFlushBatchSize] = strconv.Itoa(settings.CPAWSEventFlushBatchSize)
+	updates[SettingKeyCPAWSEventFlushIntervalMS] = strconv.Itoa(settings.CPAWSEventFlushIntervalMS)
 
 	// 余额、订阅到期与账号限额通知
 	updates[SettingKeyBalanceLowNotifyEnabled] = strconv.FormatBool(settings.BalanceLowNotifyEnabled)
@@ -785,6 +816,7 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	if s.cfg != nil {
 		s.cfg.SetForwardedClientIPSettings(settings.APIKeyACLTrustForwardedIP, settings.ForwardedClientIPHeaders)
 	}
+	s.notifyRuntimeListeners()
 	// codex_cli_only 加固策略缓存：设置更新后强制下次重载（涉及 4 个键 + JSON 解析，直接置过期）。
 	s.codexRestrictionPolicySF.Forget("codex_restriction_policy")
 	s.codexRestrictionPolicyCache.Store(&cachedCodexRestrictionPolicy{expiresAt: 0})

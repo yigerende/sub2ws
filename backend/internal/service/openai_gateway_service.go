@@ -455,6 +455,8 @@ type OpenAIGatewayService struct {
 	liveAttestationCipher SecretEncryptor
 
 	openaiWSPoolOnce               sync.Once
+	openaiCPAWSPoolMu              sync.Mutex
+	openaiCPAAffinityOnce          sync.Once
 	openaiWSStateStoreOnce         sync.Once
 	openaiSchedulerOnce            sync.Once
 	openaiProxyStreamCircuitOnce   sync.Once
@@ -462,6 +464,8 @@ type OpenAIGatewayService struct {
 	openaiModelTransientOnce       sync.Once
 	agentIdentityTaskMu            sync.Mutex
 	openaiWSPool                   *openAIWSConnPool
+	openaiCPAWSPool                *openAIWSConnPool
+	openaiCPAAffinity              atomic.Pointer[openAICPACacheAffinityCoordinator]
 	openaiWSStateStore             OpenAIWSStateStore
 	openaiScheduler                OpenAIAccountScheduler
 	openaiWSPassthroughDialer      openAIWSClientDialer
@@ -560,6 +564,9 @@ func NewOpenAIGatewayService(
 		responseHeaderFilter:  compileResponseHeaderFilter(cfg),
 		codexSnapshotThrottle: newAccountWriteThrottle(openAICodexSnapshotPersistMinInterval),
 		openaiModelTransient:  newOpenAIAccountModelTransientState(openAIModelTransientDefaultMax),
+	}
+	if settingService != nil {
+		settingService.SubscribeRuntime(svc.reloadCPAWSConnPool)
 	}
 	if rateLimitService != nil {
 		rateLimitService.SetAccountRuntimeBlocker(svc)
@@ -683,11 +690,28 @@ func (s *OpenAIGatewayService) CloseOpenAIWSPool() {
 	if s != nil && s.openaiWSPool != nil {
 		s.openaiWSPool.Close()
 	}
+	if s != nil {
+		s.openaiCPAWSPoolMu.Lock()
+		pool := s.openaiCPAWSPool
+		s.openaiCPAWSPool = nil
+		s.openaiCPAWSPoolMu.Unlock()
+		if pool != nil {
+			pool.Close()
+		}
+	}
 }
 
 func (s *OpenAIGatewayService) InvalidateAgentIdentityWSConnections(accountID int64) {
 	if pool := s.getOpenAIWSConnPool(); pool != nil {
 		pool.ClearAccount(accountID)
+	}
+	if s != nil {
+		s.openaiCPAWSPoolMu.Lock()
+		pool := s.openaiCPAWSPool
+		s.openaiCPAWSPoolMu.Unlock()
+		if pool != nil {
+			pool.ClearAccount(accountID)
+		}
 	}
 }
 
@@ -779,6 +803,10 @@ func classifyOpenAIWSReconnectReason(err error) (string, bool) {
 		"ws_connection_limit_reached",
 		"missing_final_response":
 		return reason, true
+	case "cpa_upstream_rate_limited":
+		// CPA WS retries a pre-response transient limit on a fresh upstream
+		// execution slot before Sub2API's account-level failover is reached.
+		return reason, true
 	default:
 		return reason, false
 	}
@@ -838,7 +866,7 @@ func resolveOpenAIWSFallbackErrorResponse(err error) (statusCode int, errType st
 		if statusCode == 0 {
 			statusCode = http.StatusUnauthorized
 		}
-	case "upstream_rate_limited":
+	case "upstream_rate_limited", "cpa_upstream_rate_limited":
 		if statusCode == 0 {
 			statusCode = http.StatusTooManyRequests
 		}
@@ -859,7 +887,7 @@ func resolveOpenAIWSFallbackErrorResponse(err error) (statusCode int, errType st
 			upstreamMessage = "upstream websocket not supported"
 		case "auth_failed":
 			upstreamMessage = "upstream authentication failed"
-		case "upstream_rate_limited":
+		case "upstream_rate_limited", "cpa_upstream_rate_limited":
 			upstreamMessage = "upstream rate limit exceeded, please retry later"
 		default:
 			upstreamMessage = "Upstream request failed"
@@ -916,19 +944,35 @@ func (s *OpenAIGatewayService) writeOpenAIWSFallbackErrorResponse(c *gin.Context
 }
 
 func (s *OpenAIGatewayService) openAIWSRetryBackoff(attempt int) time.Duration {
+	return s.openAIWSRetryBackoffForConfig(attempt, s.cfg, true)
+}
+
+func (s *OpenAIGatewayService) openAIWSRetryBackoffForDecision(decision OpenAIWSProtocolDecision, attempt int) time.Duration {
+	if decision.Transport == OpenAIUpstreamTransportResponsesWebsocketCPA {
+		return s.openAIWSRetryBackoffForConfig(attempt, s.openAIWSRuntimeConfigForDecision(decision), false)
+	}
+	return s.openAIWSRetryBackoff(attempt)
+}
+
+func (s *OpenAIGatewayService) openAIWSRetryBackoffForConfig(attempt int, runtimeCfg *config.Config, useDefaults bool) time.Duration {
 	if attempt <= 0 {
 		return 0
 	}
 
-	initial := openAIWSRetryBackoffInitialDefault
-	maxBackoff := openAIWSRetryBackoffMaxDefault
-	jitterRatio := openAIWSRetryJitterRatioDefault
-	if s != nil && s.cfg != nil {
-		wsCfg := s.cfg.Gateway.OpenAIWS
-		if wsCfg.RetryBackoffInitialMS > 0 {
+	initial := time.Duration(0)
+	maxBackoff := time.Duration(0)
+	jitterRatio := 0.0
+	if useDefaults {
+		initial = openAIWSRetryBackoffInitialDefault
+		maxBackoff = openAIWSRetryBackoffMaxDefault
+		jitterRatio = openAIWSRetryJitterRatioDefault
+	}
+	if runtimeCfg != nil {
+		wsCfg := runtimeCfg.Gateway.OpenAIWS
+		if wsCfg.RetryBackoffInitialMS > 0 || !useDefaults {
 			initial = time.Duration(wsCfg.RetryBackoffInitialMS) * time.Millisecond
 		}
-		if wsCfg.RetryBackoffMaxMS > 0 {
+		if wsCfg.RetryBackoffMaxMS > 0 || !useDefaults {
 			maxBackoff = time.Duration(wsCfg.RetryBackoffMaxMS) * time.Millisecond
 		}
 		if wsCfg.RetryJitterRatio >= 0 {
@@ -978,8 +1022,16 @@ func (s *OpenAIGatewayService) openAIWSRetryBackoff(attempt int) time.Duration {
 }
 
 func (s *OpenAIGatewayService) openAIWSRetryTotalBudget() time.Duration {
-	if s != nil && s.cfg != nil {
-		ms := s.cfg.Gateway.OpenAIWS.RetryTotalBudgetMS
+	return s.openAIWSRetryTotalBudgetForConfig(s.cfg)
+}
+
+func (s *OpenAIGatewayService) openAIWSRetryTotalBudgetForDecision(decision OpenAIWSProtocolDecision) time.Duration {
+	return s.openAIWSRetryTotalBudgetForConfig(s.openAIWSRuntimeConfigForDecision(decision))
+}
+
+func (s *OpenAIGatewayService) openAIWSRetryTotalBudgetForConfig(runtimeCfg *config.Config) time.Duration {
+	if runtimeCfg != nil {
+		ms := runtimeCfg.Gateway.OpenAIWS.RetryTotalBudgetMS
 		if ms <= 0 {
 			return 0
 		}

@@ -2078,6 +2078,62 @@ func (a *Account) IsOpenAIResponsesWebSocketV2Enabled() bool {
 	return false
 }
 
+// IsOpenAICPAWebSocketEnabled reports whether this account should use the
+// CPA-style upstream WebSocket executor.  This is deliberately independent
+// from the existing Sub2API WS mode: when it is false, the current resolver
+// and transport path are left untouched.
+//
+// The flag is stored in accounts.extra so existing databases and imported
+// accounts remain backward compatible.
+func (a *Account) IsOpenAICPAWebSocketEnabled() bool {
+	if a == nil || !a.IsOpenAI() || a.Extra == nil {
+		return false
+	}
+	enabled, ok := a.Extra["openai_cpa_ws_enabled"].(bool)
+	return ok && enabled
+}
+
+const (
+	OpenAICPACacheAffinityModeFirstToken = "first_token"
+	OpenAICPACacheAffinityModeBalanced   = "balanced"
+	OpenAICPACacheAffinityModeCacheFirst = "cache_first"
+)
+
+// IsOpenAICPACacheAffinityEnabled reports whether this CPAWS account may
+// participate in the optional account-level cache-affinity coordinator.
+func (a *Account) IsOpenAICPACacheAffinityEnabled() bool {
+	if !a.IsOpenAICPAWebSocketEnabled() || a.Extra == nil {
+		return false
+	}
+	enabled, ok := a.Extra["openai_cpa_ws_cache_affinity_enabled"].(bool)
+	return ok && enabled
+}
+
+// IsOpenAICPAPrefixHeatEnabled enables cross-session prefix heat only for
+// accounts that already participate in CPA cache affinity.
+func (a *Account) IsOpenAICPAPrefixHeatEnabled() bool {
+	if !a.IsOpenAICPACacheAffinityEnabled() || a.Extra == nil {
+		return false
+	}
+	enabled, ok := a.Extra["openai_cpa_ws_prefix_heat_enabled"].(bool)
+	return ok && enabled
+}
+
+func (a *Account) OpenAICPACacheAffinityMode() string {
+	if !a.IsOpenAICPACacheAffinityEnabled() || a.Extra == nil {
+		return OpenAICPACacheAffinityModeBalanced
+	}
+	mode, _ := a.Extra["openai_cpa_ws_cache_affinity_mode"].(string)
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case OpenAICPACacheAffinityModeFirstToken:
+		return OpenAICPACacheAffinityModeFirstToken
+	case OpenAICPACacheAffinityModeCacheFirst:
+		return OpenAICPACacheAffinityModeCacheFirst
+	default:
+		return OpenAICPACacheAffinityModeBalanced
+	}
+}
+
 const (
 	OpenAIWSIngressModeOff         = "off"
 	OpenAIWSIngressModeShared      = "shared"

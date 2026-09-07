@@ -287,6 +287,23 @@ type SystemSettings struct {
 	OpenAIAdvancedSchedulerEffectiveWeightUpstreamCost     string
 	OpenAIAdvancedSchedulerEffectiveWeightPreviousResponse string
 	OpenAIAdvancedSchedulerEffectiveWeightSessionSticky    string
+	CPAWSMaxConnsPerAccount                                int
+	CPAWSMinIdlePerAccount                                 int
+	CPAWSMaxIdlePerAccount                                 int
+	CPAWSQueueLimitPerConn                                 int
+	CPAWSPoolTargetUtilization                             float64
+	CPAWSMaxRequestsPerConn                                int
+	CPAWSMaxConnAgeSeconds                                 int
+	CPAWSDialTimeoutSeconds                                int
+	CPAWSReadTimeoutSeconds                                int
+	CPAWSWriteTimeoutSeconds                               int
+	CPAWSPrewarmCooldownMS                                 int
+	CPAWSRetryBackoffInitialMS                             int
+	CPAWSRetryBackoffMaxMS                                 int
+	CPAWSRetryJitterRatio                                  float64
+	CPAWSRetryTotalBudgetMS                                int
+	CPAWSEventFlushBatchSize                               int
+	CPAWSEventFlushIntervalMS                              int
 
 	// 余额不足提醒
 	BalanceLowNotifyEnabled     bool

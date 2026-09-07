@@ -705,6 +705,23 @@ export interface SystemSettings {
   openai_advanced_scheduler_effective_weight_upstream_cost?: string;
   openai_advanced_scheduler_effective_weight_previous_response?: string;
   openai_advanced_scheduler_effective_weight_session_sticky?: string;
+  cpa_ws_max_conns_per_account?: number;
+  cpa_ws_min_idle_per_account?: number;
+  cpa_ws_max_idle_per_account?: number;
+  cpa_ws_queue_limit_per_conn?: number;
+  cpa_ws_pool_target_utilization?: number;
+  cpa_ws_max_requests_per_conn?: number;
+  cpa_ws_max_conn_age_seconds?: number;
+  cpa_ws_dial_timeout_seconds?: number;
+  cpa_ws_read_timeout_seconds?: number;
+  cpa_ws_write_timeout_seconds?: number;
+  cpa_ws_prewarm_cooldown_ms?: number;
+  cpa_ws_retry_backoff_initial_ms?: number;
+  cpa_ws_retry_backoff_max_ms?: number;
+  cpa_ws_retry_jitter_ratio?: number;
+  cpa_ws_retry_total_budget_ms?: number;
+  cpa_ws_event_flush_batch_size?: number;
+  cpa_ws_event_flush_interval_ms?: number;
 
   // 余额、订阅到期与账号限额通知
   balance_low_notify_enabled: boolean;
@@ -1007,6 +1024,23 @@ export interface UpdateSettingsRequest {
   openai_advanced_scheduler_weight_upstream_cost?: string;
   openai_advanced_scheduler_weight_previous_response?: string;
   openai_advanced_scheduler_weight_session_sticky?: string;
+  cpa_ws_max_conns_per_account?: number;
+  cpa_ws_min_idle_per_account?: number;
+  cpa_ws_max_idle_per_account?: number;
+  cpa_ws_queue_limit_per_conn?: number;
+  cpa_ws_pool_target_utilization?: number;
+  cpa_ws_max_requests_per_conn?: number;
+  cpa_ws_max_conn_age_seconds?: number;
+  cpa_ws_dial_timeout_seconds?: number;
+  cpa_ws_read_timeout_seconds?: number;
+  cpa_ws_write_timeout_seconds?: number;
+  cpa_ws_prewarm_cooldown_ms?: number;
+  cpa_ws_retry_backoff_initial_ms?: number;
+  cpa_ws_retry_backoff_max_ms?: number;
+  cpa_ws_retry_jitter_ratio?: number;
+  cpa_ws_retry_total_budget_ms?: number;
+  cpa_ws_event_flush_batch_size?: number;
+  cpa_ws_event_flush_interval_ms?: number;
   // 余额、订阅到期与账号限额通知
   balance_low_notify_enabled?: boolean;
   balance_low_notify_threshold?: number;

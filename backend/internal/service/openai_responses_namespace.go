@@ -48,7 +48,7 @@ func shouldFlattenOpenAIResponsesNamespaces(
 	if !compactPath && !account.IsOpenAIResponsesFlattenNamespacesEnabled() {
 		return false
 	}
-	if transport == OpenAIUpstreamTransportResponsesWebsocketV2 && !passthroughEnabled {
+	if isOpenAIResponsesWebsocketTransport(transport) && !passthroughEnabled {
 		return false
 	}
 	return true
@@ -61,7 +61,7 @@ func shouldStripOpenAIResponsesInputNamespaces(account *Account, transport OpenA
 	if account == nil || (!account.IsOpenAIOAuthLike() && !account.IsOpenAIApiKey()) {
 		return false
 	}
-	if transport == OpenAIUpstreamTransportResponsesWebsocketV2 && !passthroughEnabled {
+	if isOpenAIResponsesWebsocketTransport(transport) && !passthroughEnabled {
 		return false
 	}
 	return true

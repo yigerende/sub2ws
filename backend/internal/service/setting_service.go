@@ -153,6 +153,40 @@ type SettingService struct {
 
 	channelMonitorRuntimeListenersMu sync.Mutex
 	channelMonitorRuntimeListeners   []func()
+	runtimeListenersMu               sync.Mutex
+	runtimeListeners                 []func()
+}
+
+// SubscribeRuntime registers a listener invoked after settings are persisted.
+func (s *SettingService) SubscribeRuntime(listener func()) (unsubscribe func()) {
+	if s == nil || listener == nil {
+		return func() {}
+	}
+	s.runtimeListenersMu.Lock()
+	s.runtimeListeners = append(s.runtimeListeners, listener)
+	idx := len(s.runtimeListeners) - 1
+	s.runtimeListenersMu.Unlock()
+	return func() {
+		s.runtimeListenersMu.Lock()
+		defer s.runtimeListenersMu.Unlock()
+		if idx >= 0 && idx < len(s.runtimeListeners) {
+			s.runtimeListeners[idx] = nil
+		}
+	}
+}
+
+func (s *SettingService) notifyRuntimeListeners() {
+	if s == nil {
+		return
+	}
+	s.runtimeListenersMu.Lock()
+	listeners := append([]func(){}, s.runtimeListeners...)
+	s.runtimeListenersMu.Unlock()
+	for _, listener := range listeners {
+		if listener != nil {
+			func() { defer func() { _ = recover() }(); listener() }()
+		}
+	}
 }
 
 // DefaultPlatformQuotaSetting 单 platform 三档限额（nil = 沿用上层；0 = 显式禁用；>0 = 上限）

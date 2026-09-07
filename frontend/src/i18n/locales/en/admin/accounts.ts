@@ -595,6 +595,17 @@ export default {
         wsModeConcurrencyHint:
           'In ctx_pool mode, account concurrency becomes the WS connection pool limit for this account.',
         wsModePassthroughHint: 'Passthrough mode does not use the WS connection pool.',
+        cpaWs: 'CPA WS execution profile',
+        cpaWsDesc: 'Use the CPA/CLIProxyAPI-Pro style WS session pool, prewarming, affinity and broken-connection recovery. Off keeps the current Sub2API WS behavior.',
+        cpaCacheAffinity: 'CPA cache affinity',
+        cpaCacheAffinityDesc: 'Let this account participate in the CPA cache-affinity pool. Off keeps Sub2API account scheduling.',
+        cpaPrefixHeat: 'Shared prefix heat',
+        cpaPrefixHeatDesc: 'Prefer an available account that successfully served the same long prefix.',
+        cpaAffinityMode: 'Affinity policy',
+        cpaAffinityModeDesc: 'Choose whether a busy affinity account favors first-token latency or cache reuse.',
+        cpaAffinityFirstToken: 'First token first',
+        cpaAffinityBalanced: 'Balanced (recommended)',
+        cpaAffinityCacheFirst: 'Cache first',
         oauthResponsesWebsocketsV2: 'OAuth WebSocket Mode',
         oauthResponsesWebsocketsV2Desc:
           'Only applies to OpenAI OAuth. This account can use OpenAI WebSocket Mode only when enabled.',

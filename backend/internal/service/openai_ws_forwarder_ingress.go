@@ -117,7 +117,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
 	forceHTTPBridge := account.Platform == PlatformGrok ||
 		(s.pluginManager != nil && s.pluginManager.ShouldRouteOpenAIOAuth(account))
-	modeRouterV2Enabled := s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled
+	cpaWS := account.IsOpenAICPAWebSocketEnabled()
+	modeRouterV2Enabled := !cpaWS && s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled
 	ingressMode := OpenAIWSIngressModeCtxPool
 	if modeRouterV2Enabled && !forceHTTPBridge {
 		ingressMode = account.ResolveOpenAIResponsesWebSocketV2Mode(s.cfg.Gateway.OpenAIWS.IngressModeDefault)
@@ -130,7 +131,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		switch ingressMode {
 		case OpenAIWSIngressModePassthrough:
-			if wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
+			if !isOpenAIResponsesWebsocketTransport(wsDecision.Transport) {
 				return fmt.Errorf("websocket ingress requires ws_v2 transport, got=%s", wsDecision.Transport)
 			}
 			if s.shouldBridgeOpenAIWSPassthroughFirstMessage(account, firstClientMessage) {
@@ -162,7 +163,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 		}
 	}
-	if !forceHTTPBridge && wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
+	if !forceHTTPBridge && !isOpenAIResponsesWebsocketTransport(wsDecision.Transport) {
 		return fmt.Errorf("websocket ingress requires ws_v2 transport, got=%s", wsDecision.Transport)
 	}
 	dedicatedMode := modeRouterV2Enabled && ingressMode == OpenAIWSIngressModeDedicated
@@ -226,6 +227,26 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			return nil, marshalErr
 		}
 		return rebuilt, nil
+	}
+	applyCPAPromptCacheIdentity := func(payload *openAIWSClientPayload, sessionHash string) error {
+		if !cpaWS || payload == nil {
+			return nil
+		}
+		model := gjson.GetBytes(payload.payloadRaw, "model").String()
+		key := cpaWSUpstreamPromptCacheKey(payload.promptCacheKey, sessionHash, model)
+		if key == "" {
+			return nil
+		}
+		if payload.promptCacheKey == "" {
+			next, setErr := applyPayloadMutation(payload.payloadRaw, "prompt_cache_key", key)
+			if setErr != nil {
+				return setErr
+			}
+			payload.payloadRaw = next
+			payload.payloadBytes = len(next)
+		}
+		payload.promptCacheKey = key
+		return nil
 	}
 
 	parseClientPayload := func(turn int, raw []byte) (openAIWSClientPayload, error) {
@@ -551,6 +572,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 	}
 	refreshIngressRouteState(firstPayload)
+	if cacheErr := applyCPAPromptCacheIdentity(&firstPayload, sessionHash); cacheErr != nil {
+		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket prompt cache identity", cacheErr)
+	}
 
 	if forceHTTPBridge || s.shouldBridgeOpenAIWSHTTP(account, firstPayload.payloadBytes, firstPayload.previousResponseID) {
 		logOpenAIWSModeInfo(
@@ -790,9 +814,18 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			return ""
 		}(),
-		ForceNewConn: false,
+		ForceNewConn:                 false,
+		StrictTargetIsolation:        cpaWS,
+		SharedHandshakeCompatibility: cpaWS,
+		AllowOverflowConn:            cpaWS,
+		PoolAffinity: func() string {
+			if !cpaWS {
+				return ""
+			}
+			return cpaWSPoolAffinity(firstRoutingFields[0].String())
+		}(),
 	}
-	pool := s.getOpenAIWSConnPool()
+	pool := s.getOpenAIWSPoolForDecision(wsDecision)
 	if pool == nil {
 		return errors.New("openai ws conn pool is nil")
 	}
@@ -842,7 +875,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		)
 	}
 
-	acquireTimeout := s.openAIWSAcquireTimeout()
+	acquireTimeout := s.openAIWSAcquireTimeoutForDecision(wsDecision)
 	if acquireTimeout <= 0 {
 		acquireTimeout = 30 * time.Second
 	}
@@ -1018,6 +1051,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				eventCount++
 				if firstEventType == "" {
 					firstEventType = eventType
+					lease.NotifyFirstUpstreamEvent()
 				}
 				lastEventType = eventType
 			}
@@ -1837,7 +1871,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, stateStore.BindResponseAccount(ctx, groupID, responseID, account.ID, ttl))
 			stateStore.BindResponseConn(responseID, connID, ttl)
 		}
-		if stateStore != nil && storeDisabled && sessionHash != "" {
+		if stateStore != nil && sessionHash != "" && (storeDisabled || cpaWS) {
 			stateStore.BindSessionConn(groupID, sessionHash, connID, s.openAIWSSessionStickyTTL())
 		}
 		if connID != "" {
@@ -1867,6 +1901,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if parseErr != nil {
 			return parseErr
 		}
+		if cacheErr := applyCPAPromptCacheIdentity(&nextPayload, sessionHash); cacheErr != nil {
+			return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket prompt cache identity", cacheErr)
+		}
 		nextRoutingFields := gjson.GetManyBytes(nextPayload.payloadRaw, "model", "service_tier")
 		if nextPayload.promptCacheKey != "" {
 			// ingress 会话在整个客户端 WS 生命周期内复用同一上游连接；
@@ -1891,6 +1928,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 		}
 		setOpenAICodexRoutingHint(baseAcquireReq.Headers, account, nextRoutingFields[0].String(), nextRoutingFields[1].String())
+		if cpaWS {
+			baseAcquireReq.PoolAffinity = cpaWSPoolAffinity(nextRoutingFields[0].String())
+		}
 		if nextPayload.previousResponseID != "" {
 			expectedPrev := strings.TrimSpace(lastTurnResponseID)
 			chainedFromLast := expectedPrev != "" && nextPayload.previousResponseID == expectedPrev

@@ -289,6 +289,23 @@ type UpdateSettingsRequest struct {
 	OpenAIAdvancedSchedulerWeightUpstreamCost          *string  `json:"openai_advanced_scheduler_weight_upstream_cost"`
 	OpenAIAdvancedSchedulerWeightPreviousResponse      *string  `json:"openai_advanced_scheduler_weight_previous_response"`
 	OpenAIAdvancedSchedulerWeightSessionSticky         *string  `json:"openai_advanced_scheduler_weight_session_sticky"`
+	CPAWSMaxConnsPerAccount                            *int     `json:"cpa_ws_max_conns_per_account"`
+	CPAWSMinIdlePerAccount                             *int     `json:"cpa_ws_min_idle_per_account"`
+	CPAWSMaxIdlePerAccount                             *int     `json:"cpa_ws_max_idle_per_account"`
+	CPAWSQueueLimitPerConn                             *int     `json:"cpa_ws_queue_limit_per_conn"`
+	CPAWSPoolTargetUtilization                         *float64 `json:"cpa_ws_pool_target_utilization"`
+	CPAWSMaxRequestsPerConn                            *int     `json:"cpa_ws_max_requests_per_conn"`
+	CPAWSMaxConnAgeSeconds                             *int     `json:"cpa_ws_max_conn_age_seconds"`
+	CPAWSDialTimeoutSeconds                            *int     `json:"cpa_ws_dial_timeout_seconds"`
+	CPAWSReadTimeoutSeconds                            *int     `json:"cpa_ws_read_timeout_seconds"`
+	CPAWSWriteTimeoutSeconds                           *int     `json:"cpa_ws_write_timeout_seconds"`
+	CPAWSPrewarmCooldownMS                             *int     `json:"cpa_ws_prewarm_cooldown_ms"`
+	CPAWSRetryBackoffInitialMS                         *int     `json:"cpa_ws_retry_backoff_initial_ms"`
+	CPAWSRetryBackoffMaxMS                             *int     `json:"cpa_ws_retry_backoff_max_ms"`
+	CPAWSRetryJitterRatio                              *float64 `json:"cpa_ws_retry_jitter_ratio"`
+	CPAWSRetryTotalBudgetMS                            *int     `json:"cpa_ws_retry_total_budget_ms"`
+	CPAWSEventFlushBatchSize                           *int     `json:"cpa_ws_event_flush_batch_size"`
+	CPAWSEventFlushIntervalMS                          *int     `json:"cpa_ws_event_flush_interval_ms"`
 
 	// 余额不足提醒
 	BalanceLowNotifyEnabled         *bool                   `json:"balance_low_notify_enabled"`
@@ -1840,6 +1857,23 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAIAdvancedSchedulerWeightUpstreamCost:     stringSetting(req.OpenAIAdvancedSchedulerWeightUpstreamCost, previousSettings.OpenAIAdvancedSchedulerWeightUpstreamCost),
 		OpenAIAdvancedSchedulerWeightPreviousResponse: stringSetting(req.OpenAIAdvancedSchedulerWeightPreviousResponse, previousSettings.OpenAIAdvancedSchedulerWeightPreviousResponse),
 		OpenAIAdvancedSchedulerWeightSessionSticky:    stringSetting(req.OpenAIAdvancedSchedulerWeightSessionSticky, previousSettings.OpenAIAdvancedSchedulerWeightSessionSticky),
+		CPAWSMaxConnsPerAccount:                       intSetting(req.CPAWSMaxConnsPerAccount, previousSettings.CPAWSMaxConnsPerAccount),
+		CPAWSMinIdlePerAccount:                        intSetting(req.CPAWSMinIdlePerAccount, previousSettings.CPAWSMinIdlePerAccount),
+		CPAWSMaxIdlePerAccount:                        intSetting(req.CPAWSMaxIdlePerAccount, previousSettings.CPAWSMaxIdlePerAccount),
+		CPAWSQueueLimitPerConn:                        intSetting(req.CPAWSQueueLimitPerConn, previousSettings.CPAWSQueueLimitPerConn),
+		CPAWSPoolTargetUtilization:                    floatSetting(req.CPAWSPoolTargetUtilization, previousSettings.CPAWSPoolTargetUtilization),
+		CPAWSMaxRequestsPerConn:                       intSetting(req.CPAWSMaxRequestsPerConn, previousSettings.CPAWSMaxRequestsPerConn),
+		CPAWSMaxConnAgeSeconds:                        intSetting(req.CPAWSMaxConnAgeSeconds, previousSettings.CPAWSMaxConnAgeSeconds),
+		CPAWSDialTimeoutSeconds:                       intSetting(req.CPAWSDialTimeoutSeconds, previousSettings.CPAWSDialTimeoutSeconds),
+		CPAWSReadTimeoutSeconds:                       intSetting(req.CPAWSReadTimeoutSeconds, previousSettings.CPAWSReadTimeoutSeconds),
+		CPAWSWriteTimeoutSeconds:                      intSetting(req.CPAWSWriteTimeoutSeconds, previousSettings.CPAWSWriteTimeoutSeconds),
+		CPAWSPrewarmCooldownMS:                        intSetting(req.CPAWSPrewarmCooldownMS, previousSettings.CPAWSPrewarmCooldownMS),
+		CPAWSRetryBackoffInitialMS:                    intSetting(req.CPAWSRetryBackoffInitialMS, previousSettings.CPAWSRetryBackoffInitialMS),
+		CPAWSRetryBackoffMaxMS:                        intSetting(req.CPAWSRetryBackoffMaxMS, previousSettings.CPAWSRetryBackoffMaxMS),
+		CPAWSRetryJitterRatio:                         floatSetting(req.CPAWSRetryJitterRatio, previousSettings.CPAWSRetryJitterRatio),
+		CPAWSRetryTotalBudgetMS:                       intSetting(req.CPAWSRetryTotalBudgetMS, previousSettings.CPAWSRetryTotalBudgetMS),
+		CPAWSEventFlushBatchSize:                      intSetting(req.CPAWSEventFlushBatchSize, previousSettings.CPAWSEventFlushBatchSize),
+		CPAWSEventFlushIntervalMS:                     intSetting(req.CPAWSEventFlushIntervalMS, previousSettings.CPAWSEventFlushIntervalMS),
 		BalanceLowNotifyEnabled: func() bool {
 			if req.BalanceLowNotifyEnabled != nil {
 				return *req.BalanceLowNotifyEnabled

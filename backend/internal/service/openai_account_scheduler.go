@@ -2339,6 +2339,27 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 		return nil, decision, fmt.Errorf("%w supporting model: %s (channel pricing restriction)", ErrNoAvailableAccounts, requestedModel)
 	}
 
+	if defaultScheduler, ok := scheduler.(*defaultOpenAIAccountScheduler); ok {
+		selection, affinityDecision, handled, affinityErr := s.trySelectOpenAICPACacheAffinity(
+			ctx,
+			defaultScheduler,
+			groupID,
+			platform,
+			requestedModel,
+			requiredTransport,
+			requiredCapability,
+			requiredImageCapability,
+			requireCompact,
+			excludedIDs,
+		)
+		if affinityErr != nil {
+			return nil, affinityDecision, affinityErr
+		}
+		if handled && selection != nil && selection.Account != nil {
+			return selection, affinityDecision, nil
+		}
+	}
+
 	var stickyAccountID int64
 	if sessionHash != "" && s.cache != nil {
 		if accountID, err := s.getStickySessionAccountID(ctx, groupID, sessionHash); err == nil && accountID > 0 {
@@ -2352,7 +2373,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 		stickyPreviousAccountID = s.ResolveAccountIDByPreviousResponseIDForScheduler(ctx, groupID, previousResponseID, requestedModel, excludedIDs, requiredCapability, requireCompact)
 	}
 
-	return scheduler.Select(ctx, OpenAIAccountScheduleRequest{
+	selection, decision, err := scheduler.Select(ctx, OpenAIAccountScheduleRequest{
 		GroupID:                 groupID,
 		Platform:                platform,
 		SessionHash:             sessionHash,
@@ -2373,6 +2394,10 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 		RequireCompact:          requireCompact,
 		ExcludedIDs:             excludedIDs,
 	})
+	if err == nil && selection != nil && selection.Account != nil {
+		noteOpenAICPAAffinitySelection(ctx, selection.Account, "scheduler")
+	}
+	return selection, decision, err
 }
 
 func accountSupportsOpenAICapabilities(account *Account, requiredCapability OpenAIEndpointCapability, requiredImageCapability OpenAIImagesCapability) bool {
@@ -2402,8 +2427,14 @@ func (s *OpenAIGatewayService) isOpenAIAccountTransportCompatible(account *Accou
 		return false
 	}
 	if requiredTransport == OpenAIUpstreamTransportResponsesWebsocketV2Ingress {
+		// CPA WS is an explicit account-level profile and does not use the
+		// Sub2API mode-router setting. Keep it eligible for WS ingress even when
+		// the legacy per-account ingress mode is off.
+		if account.IsOpenAICPAWebSocketEnabled() {
+			return isOpenAIResponsesWebsocketTransport(s.getOpenAIWSProtocolResolver().Resolve(account).Transport)
+		}
 		if s.cfg == nil || !s.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled {
-			return s.getOpenAIWSProtocolResolver().Resolve(account).Transport == OpenAIUpstreamTransportResponsesWebsocketV2
+			return isOpenAIResponsesWebsocketTransport(s.getOpenAIWSProtocolResolver().Resolve(account).Transport)
 		}
 		mode := account.ResolveOpenAIResponsesWebSocketV2Mode(s.cfg.Gateway.OpenAIWS.IngressModeDefault)
 		switch mode {
@@ -2413,7 +2444,11 @@ func (s *OpenAIGatewayService) isOpenAIAccountTransportCompatible(account *Accou
 			return false
 		}
 	}
-	return s.getOpenAIWSProtocolResolver().Resolve(account).Transport == requiredTransport
+	resolved := s.getOpenAIWSProtocolResolver().Resolve(account).Transport
+	if requiredTransport == OpenAIUpstreamTransportResponsesWebsocketV2 {
+		return isOpenAIResponsesWebsocketTransport(resolved)
+	}
+	return resolved == requiredTransport
 }
 
 func (s *OpenAIGatewayService) ReportOpenAIAccountScheduleResult(account *Account, model string, success bool, firstTokenMs *int, observedErr ...error) bool {

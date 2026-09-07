@@ -18,6 +18,42 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
+const (
+	cpaWSDefaultMaxConnsPerAccount    = 48
+	cpaWSDefaultMinIdlePerAccount     = 3
+	cpaWSDefaultMaxIdlePerAccount     = 48
+	cpaWSDefaultQueueLimitPerConn     = 1
+	cpaWSDefaultPoolTargetUtilization = 1.0
+	cpaWSDefaultMaxRequestsPerConn    = 0
+	cpaWSDefaultMaxConnAgeSeconds     = 21600
+	cpaWSDefaultDialTimeoutSeconds    = 30
+	cpaWSDefaultReadTimeoutSeconds    = 300
+	cpaWSDefaultWriteTimeoutSeconds   = 300
+	cpaWSDefaultPrewarmCooldownMS     = 0
+	cpaWSDefaultRetryBackoffInitialMS = 0
+	cpaWSDefaultRetryBackoffMaxMS     = 0
+	cpaWSDefaultRetryJitterRatio      = 0.0
+	cpaWSDefaultRetryTotalBudgetMS    = 0
+	cpaWSDefaultEventFlushBatchSize   = 1
+	cpaWSDefaultEventFlushIntervalMS  = 0
+)
+
+func parseSettingInt(raw string, fallback int) int {
+	v, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return fallback
+	}
+	return v
+}
+
+func parseSettingFloat(raw string, fallback float64) float64 {
+	v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+		return fallback
+	}
+	return v
+}
+
 // InitializeDefaultSettings 初始化默认设置
 func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 	// 检查是否已有设置
@@ -259,6 +295,23 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAIAdvancedSchedulerWeightUpstreamCost:          "",
 		SettingKeyOpenAIAdvancedSchedulerWeightPreviousResponse:      "",
 		SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky:         "",
+		SettingKeyCPAWSMaxConnsPerAccount:                            strconv.Itoa(cpaWSDefaultMaxConnsPerAccount),
+		SettingKeyCPAWSMinIdlePerAccount:                             strconv.Itoa(cpaWSDefaultMinIdlePerAccount),
+		SettingKeyCPAWSMaxIdlePerAccount:                             strconv.Itoa(cpaWSDefaultMaxIdlePerAccount),
+		SettingKeyCPAWSQueueLimitPerConn:                             strconv.Itoa(cpaWSDefaultQueueLimitPerConn),
+		SettingKeyCPAWSPoolTargetUtilization:                         strconv.FormatFloat(cpaWSDefaultPoolTargetUtilization, 'f', -1, 64),
+		SettingKeyCPAWSMaxRequestsPerConn:                            strconv.Itoa(cpaWSDefaultMaxRequestsPerConn),
+		SettingKeyCPAWSMaxConnAgeSeconds:                             strconv.Itoa(cpaWSDefaultMaxConnAgeSeconds),
+		SettingKeyCPAWSDialTimeoutSeconds:                            strconv.Itoa(cpaWSDefaultDialTimeoutSeconds),
+		SettingKeyCPAWSReadTimeoutSeconds:                            strconv.Itoa(cpaWSDefaultReadTimeoutSeconds),
+		SettingKeyCPAWSWriteTimeoutSeconds:                           strconv.Itoa(cpaWSDefaultWriteTimeoutSeconds),
+		SettingKeyCPAWSPrewarmCooldownMS:                             strconv.Itoa(cpaWSDefaultPrewarmCooldownMS),
+		SettingKeyCPAWSRetryBackoffInitialMS:                         strconv.Itoa(cpaWSDefaultRetryBackoffInitialMS),
+		SettingKeyCPAWSRetryBackoffMaxMS:                             strconv.Itoa(cpaWSDefaultRetryBackoffMaxMS),
+		SettingKeyCPAWSRetryJitterRatio:                              strconv.FormatFloat(cpaWSDefaultRetryJitterRatio, 'f', -1, 64),
+		SettingKeyCPAWSRetryTotalBudgetMS:                            strconv.Itoa(cpaWSDefaultRetryTotalBudgetMS),
+		SettingKeyCPAWSEventFlushBatchSize:                           strconv.Itoa(cpaWSDefaultEventFlushBatchSize),
+		SettingKeyCPAWSEventFlushIntervalMS:                          strconv.Itoa(cpaWSDefaultEventFlushIntervalMS),
 
 		SettingKeyAllowUserViewErrorRequests: "false",
 	}
@@ -921,6 +974,23 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.OpenAIAdvancedSchedulerWeightUpstreamCost = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerWeightUpstreamCost])
 	result.OpenAIAdvancedSchedulerWeightPreviousResponse = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerWeightPreviousResponse])
 	result.OpenAIAdvancedSchedulerWeightSessionSticky = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky])
+	result.CPAWSMaxConnsPerAccount = parseSettingInt(settings[SettingKeyCPAWSMaxConnsPerAccount], cpaWSDefaultMaxConnsPerAccount)
+	result.CPAWSMinIdlePerAccount = parseSettingInt(settings[SettingKeyCPAWSMinIdlePerAccount], cpaWSDefaultMinIdlePerAccount)
+	result.CPAWSMaxIdlePerAccount = parseSettingInt(settings[SettingKeyCPAWSMaxIdlePerAccount], cpaWSDefaultMaxIdlePerAccount)
+	result.CPAWSQueueLimitPerConn = parseSettingInt(settings[SettingKeyCPAWSQueueLimitPerConn], cpaWSDefaultQueueLimitPerConn)
+	result.CPAWSPoolTargetUtilization = parseSettingFloat(settings[SettingKeyCPAWSPoolTargetUtilization], cpaWSDefaultPoolTargetUtilization)
+	result.CPAWSMaxRequestsPerConn = parseSettingInt(settings[SettingKeyCPAWSMaxRequestsPerConn], cpaWSDefaultMaxRequestsPerConn)
+	result.CPAWSMaxConnAgeSeconds = parseSettingInt(settings[SettingKeyCPAWSMaxConnAgeSeconds], cpaWSDefaultMaxConnAgeSeconds)
+	result.CPAWSDialTimeoutSeconds = parseSettingInt(settings[SettingKeyCPAWSDialTimeoutSeconds], cpaWSDefaultDialTimeoutSeconds)
+	result.CPAWSReadTimeoutSeconds = parseSettingInt(settings[SettingKeyCPAWSReadTimeoutSeconds], cpaWSDefaultReadTimeoutSeconds)
+	result.CPAWSWriteTimeoutSeconds = parseSettingInt(settings[SettingKeyCPAWSWriteTimeoutSeconds], cpaWSDefaultWriteTimeoutSeconds)
+	result.CPAWSPrewarmCooldownMS = parseSettingInt(settings[SettingKeyCPAWSPrewarmCooldownMS], cpaWSDefaultPrewarmCooldownMS)
+	result.CPAWSRetryBackoffInitialMS = parseSettingInt(settings[SettingKeyCPAWSRetryBackoffInitialMS], cpaWSDefaultRetryBackoffInitialMS)
+	result.CPAWSRetryBackoffMaxMS = parseSettingInt(settings[SettingKeyCPAWSRetryBackoffMaxMS], cpaWSDefaultRetryBackoffMaxMS)
+	result.CPAWSRetryJitterRatio = parseSettingFloat(settings[SettingKeyCPAWSRetryJitterRatio], cpaWSDefaultRetryJitterRatio)
+	result.CPAWSRetryTotalBudgetMS = parseSettingInt(settings[SettingKeyCPAWSRetryTotalBudgetMS], cpaWSDefaultRetryTotalBudgetMS)
+	result.CPAWSEventFlushBatchSize = parseSettingInt(settings[SettingKeyCPAWSEventFlushBatchSize], cpaWSDefaultEventFlushBatchSize)
+	result.CPAWSEventFlushIntervalMS = parseSettingInt(settings[SettingKeyCPAWSEventFlushIntervalMS], cpaWSDefaultEventFlushIntervalMS)
 	result.OpenAIAdvancedSchedulerEffectiveLBTopK = s.openAIAdvancedSchedulerEffectiveLBTopK()
 	effectiveWeights := s.openAIAdvancedSchedulerEffectiveWeights()
 	result.OpenAIAdvancedSchedulerEffectiveWeightPriority = formatOpenAIAdvancedSchedulerFloat(effectiveWeights.Priority)

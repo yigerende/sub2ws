@@ -262,6 +262,23 @@ type SystemSettings struct {
 	OpenAIAdvancedSchedulerEffectiveWeightUpstreamCost     string  `json:"openai_advanced_scheduler_effective_weight_upstream_cost"`
 	OpenAIAdvancedSchedulerEffectiveWeightPreviousResponse string  `json:"openai_advanced_scheduler_effective_weight_previous_response"`
 	OpenAIAdvancedSchedulerEffectiveWeightSessionSticky    string  `json:"openai_advanced_scheduler_effective_weight_session_sticky"`
+	CPAWSMaxConnsPerAccount                                int     `json:"cpa_ws_max_conns_per_account"`
+	CPAWSMinIdlePerAccount                                 int     `json:"cpa_ws_min_idle_per_account"`
+	CPAWSMaxIdlePerAccount                                 int     `json:"cpa_ws_max_idle_per_account"`
+	CPAWSQueueLimitPerConn                                 int     `json:"cpa_ws_queue_limit_per_conn"`
+	CPAWSPoolTargetUtilization                             float64 `json:"cpa_ws_pool_target_utilization"`
+	CPAWSMaxRequestsPerConn                                int     `json:"cpa_ws_max_requests_per_conn"`
+	CPAWSMaxConnAgeSeconds                                 int     `json:"cpa_ws_max_conn_age_seconds"`
+	CPAWSDialTimeoutSeconds                                int     `json:"cpa_ws_dial_timeout_seconds"`
+	CPAWSReadTimeoutSeconds                                int     `json:"cpa_ws_read_timeout_seconds"`
+	CPAWSWriteTimeoutSeconds                               int     `json:"cpa_ws_write_timeout_seconds"`
+	CPAWSPrewarmCooldownMS                                 int     `json:"cpa_ws_prewarm_cooldown_ms"`
+	CPAWSRetryBackoffInitialMS                             int     `json:"cpa_ws_retry_backoff_initial_ms"`
+	CPAWSRetryBackoffMaxMS                                 int     `json:"cpa_ws_retry_backoff_max_ms"`
+	CPAWSRetryJitterRatio                                  float64 `json:"cpa_ws_retry_jitter_ratio"`
+	CPAWSRetryTotalBudgetMS                                int     `json:"cpa_ws_retry_total_budget_ms"`
+	CPAWSEventFlushBatchSize                               int     `json:"cpa_ws_event_flush_batch_size"`
+	CPAWSEventFlushIntervalMS                              int     `json:"cpa_ws_event_flush_interval_ms"`
 
 	// Payment configuration
 	PaymentEnabled                   bool     `json:"payment_enabled"`

@@ -42,7 +42,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	if !s.isOpenAIWSGeneratePrewarmEnabled() {
 		return nil
 	}
-	if decision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
+	if !isOpenAIResponsesWebsocketTransport(decision.Transport) {
 		logOpenAIWSModeInfo(
 			"prewarm_skip account_id=%d conn_id=%s reason=transport_not_v2 transport=%s",
 			account.ID,
@@ -78,7 +78,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	prewarmPayload["generate"] = false
 	prewarmPayloadJSON := payloadAsJSONBytes(prewarmPayload)
 
-	if err := lease.WriteJSONWithContextTimeout(ctx, prewarmPayload, s.openAIWSWriteTimeout()); err != nil {
+	if err := lease.WriteJSONWithContextTimeout(ctx, prewarmPayload, s.openAIWSWriteTimeoutForDecision(decision)); err != nil {
 		lease.MarkBroken()
 		logOpenAIWSModeInfo(
 			"prewarm_write_fail account_id=%d conn_id=%s cause=%s",
@@ -94,7 +94,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	prewarmEventCount := 0
 	prewarmTerminalCount := 0
 	for {
-		message, readErr := lease.ReadMessageWithContextTimeout(ctx, s.openAIWSReadTimeout())
+		message, readErr := lease.ReadMessageWithContextTimeout(ctx, s.openAIWSReadTimeoutForDecision(decision))
 		if readErr != nil {
 			lease.MarkBroken()
 			closeStatus, closeReason := summarizeOpenAIWSReadCloseError(readErr)
@@ -560,7 +560,7 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 	// survive an HTTP fallback. Official API-key Responses HTTP requests are
 	// different: previous_response_id is supported by the provider and scoped to
 	// the selected key/project, so the response-id binding must retain that key.
-	if !account.IsOpenAIApiKey() && s.getOpenAIWSProtocolResolver().Resolve(account).Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
+	if !account.IsOpenAIApiKey() && !isOpenAIResponsesWebsocketTransport(s.getOpenAIWSProtocolResolver().Resolve(account).Transport) {
 		return 0, nil, "", nil
 	}
 	if shouldClearStickySession(account, requestedModel) || !account.IsOpenAI() || !account.IsSchedulable() {

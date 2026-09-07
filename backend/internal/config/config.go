@@ -1285,6 +1285,10 @@ type GatewayOpenAIWSConfig struct {
 	WriteTimeoutSeconds   int     `mapstructure:"write_timeout_seconds"`
 	PoolTargetUtilization float64 `mapstructure:"pool_target_utilization"`
 	QueueLimitPerConn     int     `mapstructure:"queue_limit_per_conn"`
+	// MaxRequestsPerConn: 单条池连接完成指定请求数后轮换；0 表示不限。
+	MaxRequestsPerConn int `mapstructure:"max_requests_per_conn"`
+	// MaxConnAgeSeconds: 单条池连接最大寿命；0 使用内置默认值。
+	MaxConnAgeSeconds int `mapstructure:"max_conn_age_seconds"`
 	// EventFlushBatchSize: WS 流式写出批量 flush 阈值（事件条数）
 	EventFlushBatchSize int `mapstructure:"event_flush_batch_size"`
 	// EventFlushIntervalMS: WS 流式写出最大等待时间（毫秒）；0 表示仅按 batch 触发
@@ -3431,6 +3435,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.OpenAIWS.QueueLimitPerConn <= 0 {
 		return fmt.Errorf("gateway.openai_ws.queue_limit_per_conn must be positive")
+	}
+	if c.Gateway.OpenAIWS.MaxRequestsPerConn < 0 {
+		return fmt.Errorf("gateway.openai_ws.max_requests_per_conn must be non-negative")
+	}
+	if c.Gateway.OpenAIWS.MaxConnAgeSeconds < 0 {
+		return fmt.Errorf("gateway.openai_ws.max_conn_age_seconds must be non-negative")
 	}
 	if c.Gateway.OpenAIWS.EventFlushBatchSize <= 0 {
 		return fmt.Errorf("gateway.openai_ws.event_flush_batch_size must be positive")

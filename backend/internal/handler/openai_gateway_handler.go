@@ -637,6 +637,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// 生图意图只影响能力路由与图片计费，不关门：混合 /v1/responses 请求的
 	// token 计费部分仍受利润门保护，独立图片/视频端点才在门外。
 	pricingCtx, pricingAt := h.gatewayService.WithOpenAIRequestPricingContext(c.Request.Context(), apiKey.GroupID)
+	pricingCtx = service.WithOpenAICPACacheAffinityRequest(pricingCtx, c.Request.Header, forwardBody, sessionHash, forwardModel)
 	c.Request = c.Request.WithContext(pricingCtx)
 
 	for {
@@ -949,7 +950,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			if account.Type == service.AccountTypeOAuth && !account.IsShadow() {
 				h.gatewayService.UpdateCodexUsageSnapshotFromHeaders(c.Request.Context(), account.ID, result.ResponseHeaders)
 			}
-			h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, forwardModel, requireCompact, result), openAIForwardSucceededForScheduling(result), result.FirstTokenMs)
+			affinitySuccess := openAIForwardSucceededForScheduling(result)
+			h.gatewayService.ReportOpenAICPACacheAffinityResult(c.Request.Context(), apiKey.GroupID, account, affinitySuccess)
+			h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, forwardModel, requireCompact, result), affinitySuccess, result.FirstTokenMs)
 		} else {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, forwardModel, requireCompact, result), openAIForwardSucceededForScheduling(result), nil)
 		}
@@ -1242,6 +1245,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 
 	// 分组利润控制：Messages 文本入口同样请求级装门并固定 pricingAt。
 	msgPricingCtx, pricingAt := h.gatewayService.WithOpenAIRequestPricingContext(c.Request.Context(), apiKey.GroupID)
+	msgPricingCtx = service.WithOpenAICPACacheAffinityRequest(msgPricingCtx, c.Request.Header, body, sessionHash, routingModel)
 	c.Request = c.Request.WithContext(msgPricingCtx)
 
 	for {
@@ -1489,6 +1493,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				return
 			}
 		}
+		h.gatewayService.ReportOpenAICPACacheAffinityResult(c.Request.Context(), apiKey.GroupID, account, true)
 		if result != nil {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, currentRoutingModel, false, result), true, result.FirstTokenMs)
 		} else {
@@ -2564,6 +2569,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	// 继续按建连时刻的谷价计费。生图意图只影响能力路由与图片计费，不关门。
 	// 建连时刻只用于选号/准入，不作为任何 turn 的计费定价时刻。
 	wsPricingCtx, _ := h.gatewayService.WithOpenAIRequestPricingContext(ctx, apiKey.GroupID)
+	wsPricingCtx = service.WithOpenAICPACacheAffinityRequest(wsPricingCtx, c.Request.Header, firstMessage, sessionHash, wsForwardModel)
 	ctx = wsPricingCtx
 
 	for {
@@ -2904,7 +2910,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if scheduleModel == "" {
 					scheduleModel = turnRequestedModel
 				}
-				h.gatewayService.ReportOpenAIAccountScheduleResult(account, scheduleModel, openAIForwardSucceededForScheduling(result), result.FirstTokenMs)
+				affinitySuccess := openAIForwardSucceededForScheduling(result)
+				h.gatewayService.ReportOpenAICPACacheAffinityResult(ctx, apiKey.GroupID, account, affinitySuccess)
+				h.gatewayService.ReportOpenAIAccountScheduleResult(account, scheduleModel, affinitySuccess, result.FirstTokenMs)
 				inboundEndpoint := GetInboundEndpoint(c)
 				upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account, result)
 				quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)

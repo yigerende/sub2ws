@@ -79,6 +79,14 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		// not send one; retain that fallback without replacing an explicit raw key.
 		promptCacheKey = openAIWSPayloadString(payload, "prompt_cache_key")
 	}
+	cpaSessionHash := ""
+	if decision.Transport == OpenAIUpstreamTransportResponsesWebsocketCPA {
+		cpaSessionHash = s.GenerateSessionHash(c, payloadAsJSONBytes(payload))
+		promptCacheKey = cpaWSUpstreamPromptCacheKey(promptCacheKey, cpaSessionHash, mappedModel)
+		if promptCacheKey != "" {
+			payload["prompt_cache_key"] = promptCacheKey
+		}
+	}
 	_, hasTools := payload["tools"]
 	debugEnabled := isOpenAIWSModeDebugEnabled()
 	payloadBytes := -1
@@ -118,7 +126,10 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 
 	stateStore := s.getOpenAIWSStateStore()
 	groupID := getOpenAIGroupIDFromContext(c)
-	sessionHash := s.GenerateSessionHash(c, nil)
+	sessionHash := cpaSessionHash
+	if sessionHash == "" {
+		sessionHash = s.GenerateSessionHash(c, nil)
+	}
 	if sessionHash == "" {
 		var legacySessionHash string
 		sessionHash, legacySessionHash = openAIWSSessionHashesFromID(promptCacheKey)
@@ -141,9 +152,17 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			preferredConnID = connID
 		}
 	}
+	if decision.Transport == OpenAIUpstreamTransportResponsesWebsocketCPA && stateStore != nil && preferredConnID == "" && sessionHash != "" {
+		// CPA keeps a soft session affinity even for store=true requests.  The
+		// pool may still choose another least-busy slot when the preferred slot
+		// is saturated, matching CPA's execution-session behaviour.
+		if connID, ok := stateStore.GetSessionConn(groupID, sessionHash); ok {
+			preferredConnID = connID
+		}
+	}
 	storeDisabledConnMode := s.openAIWSStoreDisabledConnMode()
 	forceNewConnByPolicy := shouldForceNewConnOnStoreDisabled(storeDisabledConnMode, lastFailureReason)
-	forceNewConn := forceNewConnByPolicy && storeDisabled && previousResponseID == "" && sessionHash != "" && preferredConnID == ""
+	forceNewConn := forceNewConnByPolicy && storeDisabled && previousResponseID == "" && sessionHash != "" && preferredConnID == "" && decision.Transport != OpenAIUpstreamTransportResponsesWebsocketCPA
 	wsHeaders, sessionResolution, buildHdrErr := s.buildOpenAIWSHeaders(
 		ctx,
 		c,
@@ -192,10 +211,11 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		account.ProxyID != nil && account.Proxy != nil,
 	)
 
-	acquireCtx, acquireCancel := context.WithTimeout(ctx, s.openAIWSAcquireTimeout())
+	acquireCtx, acquireCancel := context.WithTimeout(ctx, s.openAIWSAcquireTimeoutForDecision(decision))
 	defer acquireCancel()
 
-	lease, err := s.getOpenAIWSConnPool().Acquire(acquireCtx, openAIWSAcquireRequest{
+	pool := s.getOpenAIWSPoolForDecision(decision)
+	lease, err := pool.Acquire(acquireCtx, openAIWSAcquireRequest{
 		Account: account,
 		WSURL:   wsURL,
 		Headers: wsHeaders,
@@ -209,6 +229,15 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				return account.Proxy.URL()
 			}
 			return ""
+		}(),
+		StrictTargetIsolation:        decision.Transport == OpenAIUpstreamTransportResponsesWebsocketCPA,
+		SharedHandshakeCompatibility: decision.Transport == OpenAIUpstreamTransportResponsesWebsocketCPA,
+		AllowOverflowConn:            decision.Transport == OpenAIUpstreamTransportResponsesWebsocketCPA,
+		PoolAffinity: func() string {
+			if decision.Transport != OpenAIUpstreamTransportResponsesWebsocketCPA {
+				return ""
+			}
+			return cpaWSPoolAffinity(mappedModel)
 		}(),
 	})
 	if err != nil {
@@ -245,9 +274,15 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		)
 		var dialErr *openAIWSDialError
 		if errors.As(err, &dialErr) && dialErr != nil && dialErr.StatusCode == http.StatusTooManyRequests {
-			s.persistOpenAIWSRateLimitSignal(ctx, account, dialErr.ResponseHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(err.Error()), mappedModel)
+			if decision.Transport != OpenAIUpstreamTransportResponsesWebsocketCPA {
+				s.persistOpenAIWSRateLimitSignal(ctx, account, dialErr.ResponseHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(err.Error()), mappedModel)
+			}
 		}
-		return nil, wrapOpenAIWSFallback(classifyOpenAIWSAcquireError(err), err)
+		fallbackReason := classifyOpenAIWSAcquireError(err)
+		if decision.Transport == OpenAIUpstreamTransportResponsesWebsocketCPA && errors.As(err, &dialErr) && dialErr != nil && dialErr.StatusCode == http.StatusTooManyRequests {
+			fallbackReason = "cpa_upstream_rate_limited"
+		}
+		return nil, wrapOpenAIWSFallback(fallbackReason, err)
 	}
 	// cleanExit 标记正常终端事件退出，此时上游不会再发送帧，连接可安全归还复用。
 	// 所有异常路径（读写错误、error 事件等）已在各自分支中提前调用 MarkBroken，
@@ -332,7 +367,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		return nil, err
 	}
 
-	if err := lease.WriteJSONWithContextTimeout(ctx, payload, s.openAIWSWriteTimeout()); err != nil {
+	if err := lease.WriteJSONWithContextTimeout(ctx, payload, s.openAIWSWriteTimeoutForDecision(decision)); err != nil {
 		lease.MarkBroken()
 		logOpenAIWSModeInfo(
 			"write_request_fail account_id=%d conn_id=%s cause=%s payload_bytes=%d",
@@ -393,8 +428,8 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	}
 
 	clientDisconnected := false
-	flushBatchSize := s.openAIWSEventFlushBatchSize()
-	flushInterval := s.openAIWSEventFlushInterval()
+	flushBatchSize := s.openAIWSEventFlushBatchSizeForDecision(decision)
+	flushInterval := s.openAIWSEventFlushIntervalForDecision(decision)
 	pendingFlushEvents := 0
 	lastFlushAt := time.Now()
 	flushStreamWriter := func(force bool) {
@@ -452,7 +487,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 	}
 
-	readTimeout := s.openAIWSReadTimeout()
+	readTimeout := s.openAIWSReadTimeoutForDecision(decision)
 	var pendingJSONDocuments [][]byte
 
 	for {
@@ -536,6 +571,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		eventCount++
 		if firstEventType == "" {
 			firstEventType = eventType
+			lease.NotifyFirstUpstreamEvent()
 		}
 		lastEventType = eventType
 
@@ -590,14 +626,20 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 
 		if eventType == "error" {
-			s.handleOpenAIWSErrorEventTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), message)
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)
-			s.persistOpenAIWSRateLimitSignal(ctx, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw, mappedModel)
+			isTransientRateLimit := isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw)
+			if decision.Transport != OpenAIUpstreamTransportResponsesWebsocketCPA || !isTransientRateLimit {
+				s.handleOpenAIWSErrorEventTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), message)
+				s.persistOpenAIWSRateLimitSignal(ctx, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw, mappedModel)
+			}
 			errMsg := strings.TrimSpace(errMsgRaw)
 			if errMsg == "" {
 				errMsg = "Upstream websocket error"
 			}
 			fallbackReason, canFallback := classifyOpenAIWSErrorEventFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
+			if decision.Transport == OpenAIUpstreamTransportResponsesWebsocketCPA && isTransientRateLimit && !wroteDownstream {
+				fallbackReason, canFallback = "cpa_upstream_rate_limited", true
+			}
 			errCode, errType, errMessage := summarizeOpenAIWSErrorEventFieldsFromRaw(errCodeRaw, errTypeRaw, errMsgRaw)
 			logOpenAIWSModeInfo(
 				"error_event account_id=%d conn_id=%s idx=%d fallback_reason=%s can_fallback=%v err_code=%s err_type=%s err_message=%s",
@@ -737,7 +779,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, stateStore.BindResponseAccount(ctx, groupID, responseID, account.ID, ttl))
 		stateStore.BindResponseConn(responseID, lease.ConnID(), ttl)
 	}
-	if stateStore != nil && storeDisabled && sessionHash != "" {
+	if stateStore != nil && sessionHash != "" {
 		stateStore.BindSessionConn(groupID, sessionHash, lease.ConnID(), s.openAIWSSessionStickyTTL())
 	}
 	firstTokenMsValue := -1
