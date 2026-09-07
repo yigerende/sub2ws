@@ -456,6 +456,7 @@ type OpenAIGatewayService struct {
 
 	openaiWSPoolOnce               sync.Once
 	openaiCPAWSPoolMu              sync.Mutex
+	openaiCPAWSGlobalOAuthEnabled  atomic.Bool
 	openaiCPAAffinityOnce          sync.Once
 	openaiWSStateStoreOnce         sync.Once
 	openaiSchedulerOnce            sync.Once
@@ -553,7 +554,6 @@ func NewOpenAIGatewayService(
 		openAITokenProvider:   openAITokenProvider,
 		grokTokenProvider:     grokTokenProvider,
 		toolCorrector:         NewCodexToolCorrector(),
-		openaiWSResolver:      NewOpenAIWSProtocolResolver(cfg),
 		resolver:              resolver,
 		channelService:        channelService,
 		balanceNotifyService:  balanceNotifyService,
@@ -565,8 +565,10 @@ func NewOpenAIGatewayService(
 		codexSnapshotThrottle: newAccountWriteThrottle(openAICodexSnapshotPersistMinInterval),
 		openaiModelTransient:  newOpenAIAccountModelTransientState(openAIModelTransientDefaultMax),
 	}
+	svc.openaiWSResolver = NewOpenAIWSProtocolResolver(cfg, svc.isOpenAICPAGlobalOAuthEnabled)
 	if settingService != nil {
-		settingService.SubscribeRuntime(svc.reloadCPAWSConnPool)
+		settingService.SubscribeRuntime(svc.reloadCPAWSRuntime)
+		svc.reloadCPAWSRuntime()
 	}
 	if rateLimitService != nil {
 		rateLimitService.SetAccountRuntimeBlocker(svc)
@@ -759,7 +761,31 @@ func (s *OpenAIGatewayService) getOpenAIWSProtocolResolver() OpenAIWSProtocolRes
 	if s != nil {
 		cfg = s.cfg
 	}
+	if s != nil {
+		return NewOpenAIWSProtocolResolver(cfg, s.isOpenAICPAGlobalOAuthEnabled)
+	}
 	return NewOpenAIWSProtocolResolver(cfg)
+}
+
+func (s *OpenAIGatewayService) isOpenAICPAGlobalOAuthEnabled() bool {
+	return s != nil && s.openaiCPAWSGlobalOAuthEnabled.Load()
+}
+
+func (s *OpenAIGatewayService) isOpenAICPACacheAffinityEnabled(account *Account) bool {
+	return account != nil && (account.IsOpenAICPACacheAffinityEnabled() ||
+		(account.Type == AccountTypeOAuth && s.isOpenAICPAGlobalOAuthEnabled()))
+}
+
+func (s *OpenAIGatewayService) isOpenAICPAPrefixHeatEnabled(account *Account) bool {
+	return account != nil && (account.IsOpenAICPAPrefixHeatEnabled() ||
+		(account.Type == AccountTypeOAuth && s.isOpenAICPAGlobalOAuthEnabled()))
+}
+
+func (s *OpenAIGatewayService) openAICPACacheAffinityMode(account *Account) string {
+	if account != nil && account.IsOpenAICPACacheAffinityEnabled() {
+		return account.OpenAICPACacheAffinityMode()
+	}
+	return OpenAICPACacheAffinityModeBalanced
 }
 
 func classifyOpenAIWSReconnectReason(err error) (string, bool) {

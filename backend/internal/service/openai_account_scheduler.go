@@ -2395,7 +2395,7 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 		ExcludedIDs:             excludedIDs,
 	})
 	if err == nil && selection != nil && selection.Account != nil {
-		noteOpenAICPAAffinitySelection(ctx, selection.Account, "scheduler")
+		s.noteOpenAICPAAffinitySelection(ctx, selection.Account, "scheduler")
 	}
 	return selection, decision, err
 }
@@ -2427,14 +2427,15 @@ func (s *OpenAIGatewayService) isOpenAIAccountTransportCompatible(account *Accou
 		return false
 	}
 	if requiredTransport == OpenAIUpstreamTransportResponsesWebsocketV2Ingress {
+		resolved := s.getOpenAIWSProtocolResolver().Resolve(account).Transport
+		if isOpenAIResponsesWebsocketTransport(resolved) {
+			return true
+		}
 		// CPA WS is an explicit account-level profile and does not use the
 		// Sub2API mode-router setting. Keep it eligible for WS ingress even when
 		// the legacy per-account ingress mode is off.
-		if account.IsOpenAICPAWebSocketEnabled() {
-			return isOpenAIResponsesWebsocketTransport(s.getOpenAIWSProtocolResolver().Resolve(account).Transport)
-		}
 		if s.cfg == nil || !s.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled {
-			return isOpenAIResponsesWebsocketTransport(s.getOpenAIWSProtocolResolver().Resolve(account).Transport)
+			return false
 		}
 		mode := account.ResolveOpenAIResponsesWebSocketV2Mode(s.cfg.Gateway.OpenAIWS.IngressModeDefault)
 		switch mode {

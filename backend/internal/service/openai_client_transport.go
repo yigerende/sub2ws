@@ -76,7 +76,7 @@ func resolveOpenAIWSDecisionForRequest(
 		return decision
 	}
 	if clientTransport == OpenAIClientTransportHTTP {
-		if account != nil && account.IsOpenAICPAWebSocketEnabled() {
+		if decision.Transport == OpenAIUpstreamTransportResponsesWebsocketCPA {
 			return decision
 		}
 		// A global ctx_pool default must not opt existing accounts into HTTP -> WS.

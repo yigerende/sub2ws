@@ -36,12 +36,17 @@ type OpenAIWSProtocolResolver interface {
 }
 
 type defaultOpenAIWSProtocolResolver struct {
-	cfg *config.Config
+	cfg                     *config.Config
+	globalCPAWSOAuthEnabled func() bool
 }
 
 // NewOpenAIWSProtocolResolver 创建默认协议决策器。
-func NewOpenAIWSProtocolResolver(cfg *config.Config) OpenAIWSProtocolResolver {
-	return &defaultOpenAIWSProtocolResolver{cfg: cfg}
+func NewOpenAIWSProtocolResolver(cfg *config.Config, globalCPAWSOAuthEnabled ...func() bool) OpenAIWSProtocolResolver {
+	resolver := &defaultOpenAIWSProtocolResolver{cfg: cfg}
+	if len(globalCPAWSOAuthEnabled) > 0 {
+		resolver.globalCPAWSOAuthEnabled = globalCPAWSOAuthEnabled[0]
+	}
+	return resolver
 }
 
 func (r *defaultOpenAIWSProtocolResolver) Resolve(account *Account) OpenAIWSProtocolDecision {
@@ -79,7 +84,9 @@ func (r *defaultOpenAIWSProtocolResolver) Resolve(account *Account) OpenAIWSProt
 	// CPA WS is an explicit account-level profile and takes precedence over
 	// the existing Sub2API mode router. The old resolver remains unchanged for
 	// accounts without this flag.
-	if account.IsOpenAICPAWebSocketEnabled() {
+	globalCPAWSOAuth := account.Type == AccountTypeOAuth &&
+		r.globalCPAWSOAuthEnabled != nil && r.globalCPAWSOAuthEnabled()
+	if account.IsOpenAICPAWebSocketEnabled() || globalCPAWSOAuth {
 		if account.Concurrency <= 0 {
 			return openAIWSHTTPDecision("account_concurrency_invalid")
 		}
@@ -90,7 +97,12 @@ func (r *defaultOpenAIWSProtocolResolver) Resolve(account *Account) OpenAIWSProt
 		}
 		return OpenAIWSProtocolDecision{
 			Transport: OpenAIUpstreamTransportResponsesWebsocketCPA,
-			Reason:    "account_cpa_ws_enabled",
+			Reason: func() string {
+				if globalCPAWSOAuth {
+					return "global_cpa_ws_oauth_enabled"
+				}
+				return "account_cpa_ws_enabled"
+			}(),
 		}
 	}
 	if wsCfg.ModeRouterV2Enabled {

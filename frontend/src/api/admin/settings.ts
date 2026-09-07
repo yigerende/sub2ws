@@ -705,6 +705,7 @@ export interface SystemSettings {
   openai_advanced_scheduler_effective_weight_upstream_cost?: string;
   openai_advanced_scheduler_effective_weight_previous_response?: string;
   openai_advanced_scheduler_effective_weight_session_sticky?: string;
+  cpa_ws_global_oauth_enabled?: boolean;
   cpa_ws_max_conns_per_account?: number;
   cpa_ws_min_idle_per_account?: number;
   cpa_ws_max_idle_per_account?: number;
@@ -1024,6 +1025,7 @@ export interface UpdateSettingsRequest {
   openai_advanced_scheduler_weight_upstream_cost?: string;
   openai_advanced_scheduler_weight_previous_response?: string;
   openai_advanced_scheduler_weight_session_sticky?: string;
+  cpa_ws_global_oauth_enabled?: boolean;
   cpa_ws_max_conns_per_account?: number;
   cpa_ws_min_idle_per_account?: number;
   cpa_ws_max_idle_per_account?: number;

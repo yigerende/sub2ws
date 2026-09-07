@@ -369,7 +369,7 @@ func (s *OpenAIGatewayService) getOpenAICPAWSConnPool() *openAIWSConnPool {
 	return s.openaiCPAWSPool
 }
 
-func (s *OpenAIGatewayService) reloadCPAWSConnPool() {
+func (s *OpenAIGatewayService) reloadCPAWSRuntime() {
 	if s == nil || s.settingService == nil {
 		return
 	}
@@ -377,6 +377,7 @@ func (s *OpenAIGatewayService) reloadCPAWSConnPool() {
 	if err != nil || settings == nil {
 		return
 	}
+	s.openaiCPAWSGlobalOAuthEnabled.Store(settings.CPAWSGlobalOAuthEnabled)
 	s.openaiCPAWSPoolMu.Lock()
 	old := s.openaiCPAWSPool
 	if old == nil || cpaWSPoolConfigMatchesSettings(old.cfg, settings) {

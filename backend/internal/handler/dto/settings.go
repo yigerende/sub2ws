@@ -262,6 +262,7 @@ type SystemSettings struct {
 	OpenAIAdvancedSchedulerEffectiveWeightUpstreamCost     string  `json:"openai_advanced_scheduler_effective_weight_upstream_cost"`
 	OpenAIAdvancedSchedulerEffectiveWeightPreviousResponse string  `json:"openai_advanced_scheduler_effective_weight_previous_response"`
 	OpenAIAdvancedSchedulerEffectiveWeightSessionSticky    string  `json:"openai_advanced_scheduler_effective_weight_session_sticky"`
+	CPAWSGlobalOAuthEnabled                                bool    `json:"cpa_ws_global_oauth_enabled"`
 	CPAWSMaxConnsPerAccount                                int     `json:"cpa_ws_max_conns_per_account"`
 	CPAWSMinIdlePerAccount                                 int     `json:"cpa_ws_min_idle_per_account"`
 	CPAWSMaxIdlePerAccount                                 int     `json:"cpa_ws_max_idle_per_account"`

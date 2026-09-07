@@ -127,7 +127,29 @@ type CreateAccountRequest struct {
 	ExpiresAt               *int64         `json:"expires_at"`
 	AutoPauseOnExpired      *bool          `json:"auto_pause_on_expired"`
 	ProbeEnabled            *bool          `json:"upstream_billing_probe_enabled"`
+	CPAWS                   *int           `json:"cpa_ws"`                     // 1 applies the recommended CPA WS profile.
 	ConfirmMixedChannelRisk *bool          `json:"confirm_mixed_channel_risk"` // 用户确认混合渠道风险
+}
+
+func applyRecommendedCPAWSCreateProfile(req *CreateAccountRequest) error {
+	if req == nil || req.CPAWS == nil || *req.CPAWS == 0 {
+		return nil
+	}
+	if *req.CPAWS != 1 {
+		return fmt.Errorf("cpa_ws must be 0 or 1")
+	}
+	if req.Platform != service.PlatformOpenAI ||
+		(req.Type != service.AccountTypeOAuth && req.Type != service.AccountTypeSetupToken && req.Type != service.AccountTypeAPIKey) {
+		return fmt.Errorf("cpa_ws=1 only supports OpenAI oauth, setup-token, or apikey accounts")
+	}
+	if req.Extra == nil {
+		req.Extra = make(map[string]any, 4)
+	}
+	req.Extra["openai_cpa_ws_enabled"] = true
+	req.Extra["openai_cpa_ws_cache_affinity_enabled"] = true
+	req.Extra["openai_cpa_ws_prefix_heat_enabled"] = true
+	req.Extra["openai_cpa_ws_cache_affinity_mode"] = service.OpenAICPACacheAffinityModeBalanced
+	return nil
 }
 
 // UpdateAccountRequest represents update account request
@@ -880,6 +902,10 @@ func (h *AccountHandler) Create(c *gin.Context) {
 	var req CreateAccountRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if err := applyRecommendedCPAWSCreateProfile(&req); err != nil {
+		response.BadRequest(c, err.Error())
 		return
 	}
 	if err := service.ValidateOpenAILongContextBillingExtra(req.Platform, req.Extra); err != nil {
@@ -1936,7 +1962,12 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	for _, item := range req.Accounts {
+	for i := range req.Accounts {
+		item := &req.Accounts[i]
+		if err := applyRecommendedCPAWSCreateProfile(item); err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
 		if err := service.ValidateOpenAILongContextBillingExtra(item.Platform, item.Extra); err != nil {
 			response.ErrorFrom(c, err)
 			return

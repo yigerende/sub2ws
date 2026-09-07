@@ -382,9 +382,9 @@ func (s *OpenAIGatewayService) SnapshotOpenAICPACacheAffinityMetrics() OpenAICPA
 	return s.openaiCPAAffinity.Load().snapshot()
 }
 
-func noteOpenAICPAAffinitySelection(ctx context.Context, account *Account, source string) {
+func (s *OpenAIGatewayService) noteOpenAICPAAffinitySelection(ctx context.Context, account *Account, source string) {
 	state := openAICPAAffinityStateFromContext(ctx)
-	if state == nil || account == nil || !account.IsOpenAICPACacheAffinityEnabled() {
+	if state == nil || account == nil || !s.isOpenAICPACacheAffinityEnabled(account) {
 		return
 	}
 	state.mu.Lock()
@@ -438,10 +438,10 @@ func (s *OpenAIGatewayService) trySelectOpenAICPACacheAffinity(
 			return nil, false, nil
 		}
 		account, err := s.getSchedulableAccount(ctx, accountID)
-		if err != nil || account == nil || !account.IsOpenAICPACacheAffinityEnabled() {
+		if err != nil || account == nil || !s.isOpenAICPACacheAffinityEnabled(account) {
 			return nil, false, nil
 		}
-		if source == "prefix" && !account.IsOpenAICPAPrefixHeatEnabled() {
+		if source == "prefix" && !s.isOpenAICPAPrefixHeatEnabled(account) {
 			return nil, false, nil
 		}
 		selection, escaped, selectErr := scheduler.selectBySessionHash(ctx, OpenAIAccountScheduleRequest{
@@ -468,12 +468,12 @@ func (s *OpenAIGatewayService) trySelectOpenAICPACacheAffinity(
 		// instead of falling back through the scheduler. Cache-first is the only
 		// explicit mode allowed to wait for an affinity account.
 		if selection.WaitPlan != nil {
-			switch account.OpenAICPACacheAffinityMode() {
+			switch s.openAICPACacheAffinityMode(account) {
 			case OpenAICPACacheAffinityModeFirstToken, OpenAICPACacheAffinityModeBalanced:
 				return nil, false, nil
 			}
 		}
-		noteOpenAICPAAffinitySelection(ctx, selection.Account, source)
+		s.noteOpenAICPAAffinitySelection(ctx, selection.Account, source)
 		return selection, true, nil
 	}
 
@@ -514,7 +514,7 @@ func (s *OpenAIGatewayService) trySelectOpenAICPACacheAffinity(
 // a successful upstream result. Selection failures never poison future routes.
 func (s *OpenAIGatewayService) ReportOpenAICPACacheAffinityResult(ctx context.Context, groupID *int64, account *Account, success bool) {
 	state := openAICPAAffinityStateFromContext(ctx)
-	if state == nil || account == nil || !success || !account.IsOpenAICPACacheAffinityEnabled() {
+	if state == nil || account == nil || !success || !s.isOpenAICPACacheAffinityEnabled(account) {
 		return
 	}
 	state.mu.Lock()
@@ -530,7 +530,7 @@ func (s *OpenAIGatewayService) ReportOpenAICPACacheAffinityResult(ctx context.Co
 	}
 	now := time.Now()
 	coordinator.bindRoute(openAICPAAffinityRouteKey(groupID, state), account.ID, now)
-	if account.IsOpenAICPAPrefixHeatEnabled() {
+	if s.isOpenAICPAPrefixHeatEnabled(account) {
 		coordinator.recordPrefix(openAICPAPrefixKey(groupID, state), account.ID, now)
 	}
 	if selectedBy == "prefix" {

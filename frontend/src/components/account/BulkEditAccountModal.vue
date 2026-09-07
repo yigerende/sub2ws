@@ -885,6 +885,91 @@
         </div>
       </div>
 
+      <!-- CPA WS execution profile -->
+      <div v-if="allOpenAIPassthroughCapable" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="mb-3 flex items-center justify-between gap-4">
+          <div class="flex-1">
+            <label
+              id="bulk-edit-openai-cpa-ws-label"
+              class="input-label mb-0"
+              for="bulk-edit-openai-cpa-ws-enabled"
+            >
+              {{ t('admin.accounts.openai.cpaWs') }}
+            </label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.cpaWsDesc') }}
+            </p>
+          </div>
+          <input
+            v-model="enableOpenAICPAWSProfile"
+            id="bulk-edit-openai-cpa-ws-enabled"
+            type="checkbox"
+            aria-controls="bulk-edit-openai-cpa-ws-body"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div
+          id="bulk-edit-openai-cpa-ws-body"
+          :class="!enableOpenAICPAWSProfile && 'pointer-events-none opacity-50'"
+          class="space-y-4"
+          role="group"
+          aria-labelledby="bulk-edit-openai-cpa-ws-label"
+        >
+          <div class="flex items-center justify-between gap-4">
+            <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('admin.accounts.openai.cpaWs') }}</span>
+            <button
+              type="button"
+              data-testid="bulk-edit-openai-cpa-ws-toggle"
+              @click="openaiCPAWSEnabled = !openaiCPAWSEnabled"
+              :class="['relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors', openaiCPAWSEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600']"
+            >
+              <span :class="['pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition', openaiCPAWSEnabled ? 'translate-x-5' : 'translate-x-0']" />
+            </button>
+          </div>
+          <div v-if="openaiCPAWSEnabled" class="space-y-4 border-t border-gray-100 pt-4 dark:border-dark-700">
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <label class="input-label mb-0">{{ t('admin.accounts.openai.cpaCacheAffinity') }}</label>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.openai.cpaCacheAffinityDesc') }}</p>
+              </div>
+              <button
+                type="button"
+                data-testid="bulk-edit-openai-cpa-cache-affinity-toggle"
+                @click="openaiCPACacheAffinityEnabled = !openaiCPACacheAffinityEnabled"
+                :class="['relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors', openaiCPACacheAffinityEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600']"
+              >
+                <span :class="['pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition', openaiCPACacheAffinityEnabled ? 'translate-x-5' : 'translate-x-0']" />
+              </button>
+            </div>
+            <template v-if="openaiCPACacheAffinityEnabled">
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <label class="input-label mb-0">{{ t('admin.accounts.openai.cpaPrefixHeat') }}</label>
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.openai.cpaPrefixHeatDesc') }}</p>
+                </div>
+                <button
+                  type="button"
+                  data-testid="bulk-edit-openai-cpa-prefix-heat-toggle"
+                  @click="openaiCPAPrefixHeatEnabled = !openaiCPAPrefixHeatEnabled"
+                  :class="['relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors', openaiCPAPrefixHeatEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600']"
+                >
+                  <span :class="['pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition', openaiCPAPrefixHeatEnabled ? 'translate-x-5' : 'translate-x-0']" />
+                </button>
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.accounts.openai.cpaAffinityMode') }}</label>
+                <p class="mb-3 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.openai.cpaAffinityModeDesc') }}</p>
+                <Select
+                  v-model="openaiCPACacheAffinityMode"
+                  data-testid="bulk-edit-openai-cpa-affinity-mode"
+                  :options="openaiCPACacheAffinityModeOptions"
+                />
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+
       <!-- OpenAI OAuth Codex CLI only -->
       <div v-if="allOpenAIOAuth" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
@@ -1664,6 +1749,7 @@ const enableOpenAIEndpointCapabilities = ref(false)
 const enableOpenAIResponsesMode = ref(false)
 const enableOpenAIWSMode = ref(false)
 const enableOpenAIAPIKeyWSMode = ref(false)
+const enableOpenAICPAWSProfile = ref(false)
 const enableUpstreamBillingAutoProbe = ref(false)
 const enableCodexCLIOnly = ref(false)
 const enableCodexCLIOnlyAppServer = ref(false)
@@ -1703,6 +1789,16 @@ const openAIEndpointCapabilities = ref<OpenAIEndpointCapability[]>([
 const openAIResponsesMode = ref<OpenAIResponsesMode>('auto')
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
+const openaiCPAWSEnabled = ref(true)
+type OpenAICPACacheAffinityMode = 'first_token' | 'balanced' | 'cache_first'
+const openaiCPACacheAffinityEnabled = ref(true)
+const openaiCPAPrefixHeatEnabled = ref(true)
+const openaiCPACacheAffinityMode = ref<OpenAICPACacheAffinityMode>('balanced')
+const openaiCPACacheAffinityModeOptions = computed(() => [
+  { value: 'first_token' as OpenAICPACacheAffinityMode, label: t('admin.accounts.openai.cpaAffinityFirstToken') },
+  { value: 'balanced' as OpenAICPACacheAffinityMode, label: t('admin.accounts.openai.cpaAffinityBalanced') },
+  { value: 'cache_first' as OpenAICPACacheAffinityMode, label: t('admin.accounts.openai.cpaAffinityCacheFirst') }
+])
 const upstreamBillingAutoProbeMode = ref<'enabled' | 'disabled'>('enabled')
 const codexCLIOnlyEnabled = ref(false)
 const codexCLIOnlyAppServerEnabled = ref(false)
@@ -2068,6 +2164,18 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     )
   }
 
+  if (enableOpenAICPAWSProfile.value && allOpenAIPassthroughCapable.value) {
+    const extra = ensureExtra()
+    extra.openai_cpa_ws_enabled = openaiCPAWSEnabled.value
+    extra.openai_cpa_ws_cache_affinity_enabled =
+      openaiCPAWSEnabled.value && openaiCPACacheAffinityEnabled.value
+    extra.openai_cpa_ws_prefix_heat_enabled =
+      openaiCPAWSEnabled.value &&
+      openaiCPACacheAffinityEnabled.value &&
+      openaiCPAPrefixHeatEnabled.value
+    extra.openai_cpa_ws_cache_affinity_mode = openaiCPACacheAffinityMode.value
+  }
+
   if (enableUpstreamBillingAutoProbe.value) {
     updates.upstream_billing_probe_enabled = upstreamBillingAutoProbeMode.value === 'enabled'
   }
@@ -2219,6 +2327,7 @@ const handleSubmit = async () => {
     enableGroups.value ||
     enableOpenAIWSMode.value ||
     enableOpenAIAPIKeyWSMode.value ||
+    (enableOpenAICPAWSProfile.value && allOpenAIPassthroughCapable.value) ||
     enableUpstreamBillingAutoProbe.value ||
     enableCodexCLIOnly.value ||
     enableCodexCLIOnlyAppServer.value ||
@@ -2370,6 +2479,7 @@ watch(
       enableOpenAIResponsesMode.value = false
       enableOpenAIWSMode.value = false
       enableOpenAIAPIKeyWSMode.value = false
+      enableOpenAICPAWSProfile.value = false
       enableUpstreamBillingAutoProbe.value = false
       enableCodexCLIOnly.value = false
       enableCodexCLIOnlyAppServer.value = false
@@ -2403,6 +2513,10 @@ watch(
       groupIds.value = []
       openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
       openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
+      openaiCPAWSEnabled.value = true
+      openaiCPACacheAffinityEnabled.value = true
+      openaiCPAPrefixHeatEnabled.value = true
+      openaiCPACacheAffinityMode.value = 'balanced'
       upstreamBillingAutoProbeMode.value = 'enabled'
       codexCLIOnlyEnabled.value = false
       codexCLIOnlyAppServerEnabled.value = false

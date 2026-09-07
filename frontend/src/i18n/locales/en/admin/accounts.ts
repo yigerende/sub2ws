@@ -96,6 +96,10 @@ export default {
       schedulableEnabled: 'Scheduling enabled',
       schedulableDisabled: 'Scheduling disabled',
       failedToToggleSchedulable: 'Failed to toggle scheduling status',
+      wsEnabled: 'Enabled',
+      wsDisabled: 'Disabled',
+      cpaWsGlobal: 'CPAWS (global)',
+      cpaWsAccount: 'CPAWS (account)',
       groupCountTotal: '{count} groups total',
       platforms: {
         anthropic: 'Anthropic',
@@ -203,6 +207,7 @@ export default {
         name: 'Name',
         id: 'Account ID',
         platformType: 'Platform/Type',
+        wsStatus: 'WS Status',
         platform: 'Platform',
         type: 'Type',
         capacity: 'Capacity',

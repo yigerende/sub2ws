@@ -283,6 +283,15 @@
               </div>
             </div>
           </template>
+          <template #cell-ws_status="{ row }">
+            <div v-if="getAccountWSStatus(row)" class="flex min-w-[6rem] flex-col items-start gap-1">
+              <span :class="['inline-flex items-center rounded px-2 py-0.5 text-xs font-medium', getAccountWSStatus(row)?.enabled ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-gray-100 text-gray-500 dark:bg-dark-700 dark:text-gray-400']">
+                {{ getAccountWSStatus(row)?.enabled ? t('admin.accounts.wsEnabled') : t('admin.accounts.wsDisabled') }}
+              </span>
+              <span class="text-[11px] text-gray-500 dark:text-gray-400">{{ getAccountWSStatus(row)?.detail }}</span>
+            </div>
+            <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
+          </template>
           <template #cell-capacity="{ row }">
             <AccountCapacityCell :account="row" />
           </template>
@@ -491,6 +500,7 @@ import { useIntervalFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
+import { useAdminSettingsStore } from '@/stores/adminSettings'
 import { adminAPI } from '@/api/admin'
 import { useTableLoader } from '@/composables/useTableLoader'
 import { useSwipeSelect, type SwipeSelectVirtualContext } from '@/composables/useSwipeSelect'
@@ -537,6 +547,7 @@ import type { Account, AccountListItem, AccountPlatform, AccountSchedulerGroupSc
 const { t } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
+const adminSettingsStore = useAdminSettingsStore()
 
 const proxies = ref<AccountProxy[]>([])
 const groups = ref<AdminGroup[]>([])
@@ -545,6 +556,29 @@ const accountGroupsForRow = (account: Pick<AccountListItem, 'group_ids'>): Admin
   const groupIDs = account.group_ids ?? []
   if (groupIDs.length === 0) return []
   return groupIDs.map(id => groupsByID.value.get(id)).filter((group): group is AdminGroup => Boolean(group))
+}
+const getAccountWSStatus = (account: AccountListItem): { enabled: boolean; detail: string } | null => {
+  if (account.platform !== 'openai') return null
+  const extra = account.extra ?? {}
+  if (account.type === 'oauth' && adminSettingsStore.cpaWSGlobalOAuthEnabled) {
+    return { enabled: true, detail: t('admin.accounts.cpaWsGlobal') }
+  }
+  if (extra.openai_cpa_ws_enabled === true) {
+    return { enabled: true, detail: t('admin.accounts.cpaWsAccount') }
+  }
+  const modeKey = account.type === 'apikey'
+    ? 'openai_apikey_responses_websockets_v2_mode'
+    : 'openai_oauth_responses_websockets_v2_mode'
+  const rawMode = extra[modeKey]
+  if (typeof rawMode === 'string' && rawMode.trim()) {
+    const mode = rawMode.trim().toLowerCase()
+    return { enabled: mode !== 'off' && mode !== 'http_bridge', detail: mode }
+  }
+  const legacyEnabled = account.type === 'apikey'
+    ? extra.openai_apikey_responses_websockets_v2_enabled === true
+    : extra.openai_oauth_responses_websockets_v2_enabled === true
+  const enabled = legacyEnabled || extra.responses_websockets_v2_enabled === true
+  return { enabled, detail: enabled ? 'ctx_pool' : t('admin.accounts.openai.wsModeOff') }
 }
 const accountTableRef = ref<HTMLElement | null>(null)
 const dataTableRef = ref<InstanceType<typeof DataTable> | null>(null)
@@ -1785,6 +1819,7 @@ const allColumns = computed(() => {
     { key: 'name', label: t('admin.accounts.columns.name'), sortable: true },
     { key: 'id', label: t('admin.accounts.columns.id'), sortable: true },
     { key: 'platform_type', label: t('admin.accounts.columns.platformType'), sortable: false },
+    { key: 'ws_status', label: t('admin.accounts.columns.wsStatus'), sortable: false },
     { key: 'capacity', label: t('admin.accounts.columns.capacity'), sortable: false },
     { key: 'status', label: t('admin.accounts.columns.status'), sortable: true },
     { key: 'schedulable', label: t('admin.accounts.columns.schedulable'), sortable: true },
@@ -2573,6 +2608,7 @@ onMounted(async () => {
   }
 
   load()
+  void adminSettingsStore.fetch()
   loadUpstreamBillingProbeGlobalState()
   const [proxiesResult, groupsResult] = await Promise.allSettled([
     adminAPI.proxies.getAll(),

@@ -295,6 +295,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAIAdvancedSchedulerWeightUpstreamCost:          "",
 		SettingKeyOpenAIAdvancedSchedulerWeightPreviousResponse:      "",
 		SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky:         "",
+		SettingKeyCPAWSGlobalOAuthEnabled:                            "false",
 		SettingKeyCPAWSMaxConnsPerAccount:                            strconv.Itoa(cpaWSDefaultMaxConnsPerAccount),
 		SettingKeyCPAWSMinIdlePerAccount:                             strconv.Itoa(cpaWSDefaultMinIdlePerAccount),
 		SettingKeyCPAWSMaxIdlePerAccount:                             strconv.Itoa(cpaWSDefaultMaxIdlePerAccount),
@@ -974,6 +975,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.OpenAIAdvancedSchedulerWeightUpstreamCost = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerWeightUpstreamCost])
 	result.OpenAIAdvancedSchedulerWeightPreviousResponse = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerWeightPreviousResponse])
 	result.OpenAIAdvancedSchedulerWeightSessionSticky = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky])
+	result.CPAWSGlobalOAuthEnabled = settings[SettingKeyCPAWSGlobalOAuthEnabled] == "true"
 	result.CPAWSMaxConnsPerAccount = parseSettingInt(settings[SettingKeyCPAWSMaxConnsPerAccount], cpaWSDefaultMaxConnsPerAccount)
 	result.CPAWSMinIdlePerAccount = parseSettingInt(settings[SettingKeyCPAWSMinIdlePerAccount], cpaWSDefaultMinIdlePerAccount)
 	result.CPAWSMaxIdlePerAccount = parseSettingInt(settings[SettingKeyCPAWSMaxIdlePerAccount], cpaWSDefaultMaxIdlePerAccount)

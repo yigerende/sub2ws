@@ -289,6 +289,7 @@ type UpdateSettingsRequest struct {
 	OpenAIAdvancedSchedulerWeightUpstreamCost          *string  `json:"openai_advanced_scheduler_weight_upstream_cost"`
 	OpenAIAdvancedSchedulerWeightPreviousResponse      *string  `json:"openai_advanced_scheduler_weight_previous_response"`
 	OpenAIAdvancedSchedulerWeightSessionSticky         *string  `json:"openai_advanced_scheduler_weight_session_sticky"`
+	CPAWSGlobalOAuthEnabled                            *bool    `json:"cpa_ws_global_oauth_enabled"`
 	CPAWSMaxConnsPerAccount                            *int     `json:"cpa_ws_max_conns_per_account"`
 	CPAWSMinIdlePerAccount                             *int     `json:"cpa_ws_min_idle_per_account"`
 	CPAWSMaxIdlePerAccount                             *int     `json:"cpa_ws_max_idle_per_account"`
@@ -1857,23 +1858,29 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAIAdvancedSchedulerWeightUpstreamCost:     stringSetting(req.OpenAIAdvancedSchedulerWeightUpstreamCost, previousSettings.OpenAIAdvancedSchedulerWeightUpstreamCost),
 		OpenAIAdvancedSchedulerWeightPreviousResponse: stringSetting(req.OpenAIAdvancedSchedulerWeightPreviousResponse, previousSettings.OpenAIAdvancedSchedulerWeightPreviousResponse),
 		OpenAIAdvancedSchedulerWeightSessionSticky:    stringSetting(req.OpenAIAdvancedSchedulerWeightSessionSticky, previousSettings.OpenAIAdvancedSchedulerWeightSessionSticky),
-		CPAWSMaxConnsPerAccount:                       intSetting(req.CPAWSMaxConnsPerAccount, previousSettings.CPAWSMaxConnsPerAccount),
-		CPAWSMinIdlePerAccount:                        intSetting(req.CPAWSMinIdlePerAccount, previousSettings.CPAWSMinIdlePerAccount),
-		CPAWSMaxIdlePerAccount:                        intSetting(req.CPAWSMaxIdlePerAccount, previousSettings.CPAWSMaxIdlePerAccount),
-		CPAWSQueueLimitPerConn:                        intSetting(req.CPAWSQueueLimitPerConn, previousSettings.CPAWSQueueLimitPerConn),
-		CPAWSPoolTargetUtilization:                    floatSetting(req.CPAWSPoolTargetUtilization, previousSettings.CPAWSPoolTargetUtilization),
-		CPAWSMaxRequestsPerConn:                       intSetting(req.CPAWSMaxRequestsPerConn, previousSettings.CPAWSMaxRequestsPerConn),
-		CPAWSMaxConnAgeSeconds:                        intSetting(req.CPAWSMaxConnAgeSeconds, previousSettings.CPAWSMaxConnAgeSeconds),
-		CPAWSDialTimeoutSeconds:                       intSetting(req.CPAWSDialTimeoutSeconds, previousSettings.CPAWSDialTimeoutSeconds),
-		CPAWSReadTimeoutSeconds:                       intSetting(req.CPAWSReadTimeoutSeconds, previousSettings.CPAWSReadTimeoutSeconds),
-		CPAWSWriteTimeoutSeconds:                      intSetting(req.CPAWSWriteTimeoutSeconds, previousSettings.CPAWSWriteTimeoutSeconds),
-		CPAWSPrewarmCooldownMS:                        intSetting(req.CPAWSPrewarmCooldownMS, previousSettings.CPAWSPrewarmCooldownMS),
-		CPAWSRetryBackoffInitialMS:                    intSetting(req.CPAWSRetryBackoffInitialMS, previousSettings.CPAWSRetryBackoffInitialMS),
-		CPAWSRetryBackoffMaxMS:                        intSetting(req.CPAWSRetryBackoffMaxMS, previousSettings.CPAWSRetryBackoffMaxMS),
-		CPAWSRetryJitterRatio:                         floatSetting(req.CPAWSRetryJitterRatio, previousSettings.CPAWSRetryJitterRatio),
-		CPAWSRetryTotalBudgetMS:                       intSetting(req.CPAWSRetryTotalBudgetMS, previousSettings.CPAWSRetryTotalBudgetMS),
-		CPAWSEventFlushBatchSize:                      intSetting(req.CPAWSEventFlushBatchSize, previousSettings.CPAWSEventFlushBatchSize),
-		CPAWSEventFlushIntervalMS:                     intSetting(req.CPAWSEventFlushIntervalMS, previousSettings.CPAWSEventFlushIntervalMS),
+		CPAWSGlobalOAuthEnabled: func() bool {
+			if req.CPAWSGlobalOAuthEnabled != nil {
+				return *req.CPAWSGlobalOAuthEnabled
+			}
+			return previousSettings.CPAWSGlobalOAuthEnabled
+		}(),
+		CPAWSMaxConnsPerAccount:    intSetting(req.CPAWSMaxConnsPerAccount, previousSettings.CPAWSMaxConnsPerAccount),
+		CPAWSMinIdlePerAccount:     intSetting(req.CPAWSMinIdlePerAccount, previousSettings.CPAWSMinIdlePerAccount),
+		CPAWSMaxIdlePerAccount:     intSetting(req.CPAWSMaxIdlePerAccount, previousSettings.CPAWSMaxIdlePerAccount),
+		CPAWSQueueLimitPerConn:     intSetting(req.CPAWSQueueLimitPerConn, previousSettings.CPAWSQueueLimitPerConn),
+		CPAWSPoolTargetUtilization: floatSetting(req.CPAWSPoolTargetUtilization, previousSettings.CPAWSPoolTargetUtilization),
+		CPAWSMaxRequestsPerConn:    intSetting(req.CPAWSMaxRequestsPerConn, previousSettings.CPAWSMaxRequestsPerConn),
+		CPAWSMaxConnAgeSeconds:     intSetting(req.CPAWSMaxConnAgeSeconds, previousSettings.CPAWSMaxConnAgeSeconds),
+		CPAWSDialTimeoutSeconds:    intSetting(req.CPAWSDialTimeoutSeconds, previousSettings.CPAWSDialTimeoutSeconds),
+		CPAWSReadTimeoutSeconds:    intSetting(req.CPAWSReadTimeoutSeconds, previousSettings.CPAWSReadTimeoutSeconds),
+		CPAWSWriteTimeoutSeconds:   intSetting(req.CPAWSWriteTimeoutSeconds, previousSettings.CPAWSWriteTimeoutSeconds),
+		CPAWSPrewarmCooldownMS:     intSetting(req.CPAWSPrewarmCooldownMS, previousSettings.CPAWSPrewarmCooldownMS),
+		CPAWSRetryBackoffInitialMS: intSetting(req.CPAWSRetryBackoffInitialMS, previousSettings.CPAWSRetryBackoffInitialMS),
+		CPAWSRetryBackoffMaxMS:     intSetting(req.CPAWSRetryBackoffMaxMS, previousSettings.CPAWSRetryBackoffMaxMS),
+		CPAWSRetryJitterRatio:      floatSetting(req.CPAWSRetryJitterRatio, previousSettings.CPAWSRetryJitterRatio),
+		CPAWSRetryTotalBudgetMS:    intSetting(req.CPAWSRetryTotalBudgetMS, previousSettings.CPAWSRetryTotalBudgetMS),
+		CPAWSEventFlushBatchSize:   intSetting(req.CPAWSEventFlushBatchSize, previousSettings.CPAWSEventFlushBatchSize),
+		CPAWSEventFlushIntervalMS:  intSetting(req.CPAWSEventFlushIntervalMS, previousSettings.CPAWSEventFlushIntervalMS),
 		BalanceLowNotifyEnabled: func() bool {
 			if req.BalanceLowNotifyEnabled != nil {
 				return *req.BalanceLowNotifyEnabled

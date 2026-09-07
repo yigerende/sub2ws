@@ -615,6 +615,7 @@ const (
 	SettingKeyOpenAIAdvancedSchedulerWeightUpstreamCost          = "openai_advanced_scheduler_weight_upstream_cost"
 	SettingKeyOpenAIAdvancedSchedulerWeightPreviousResponse      = "openai_advanced_scheduler_weight_previous_response"
 	SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky         = "openai_advanced_scheduler_weight_session_sticky"
+	SettingKeyCPAWSGlobalOAuthEnabled                            = "cpa_ws_global_oauth_enabled"
 	SettingKeyCPAWSMaxConnsPerAccount                            = "cpa_ws_max_conns_per_account"
 	SettingKeyCPAWSMinIdlePerAccount                             = "cpa_ws_min_idle_per_account"
 	SettingKeyCPAWSMaxIdlePerAccount                             = "cpa_ws_max_idle_per_account"

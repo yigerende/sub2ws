@@ -1479,6 +1479,8 @@ export interface CreateAccountRequest {
   expires_at?: number | null
   auto_pause_on_expired?: boolean
   upstream_billing_probe_enabled?: boolean
+  /** External provisioning shortcut: 1 applies the recommended CPA WS profile. */
+  cpa_ws?: 0 | 1
   confirm_mixed_channel_risk?: boolean
 }
 

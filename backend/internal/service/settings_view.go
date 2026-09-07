@@ -287,6 +287,7 @@ type SystemSettings struct {
 	OpenAIAdvancedSchedulerEffectiveWeightUpstreamCost     string
 	OpenAIAdvancedSchedulerEffectiveWeightPreviousResponse string
 	OpenAIAdvancedSchedulerEffectiveWeightSessionSticky    string
+	CPAWSGlobalOAuthEnabled                                bool
 	CPAWSMaxConnsPerAccount                                int
 	CPAWSMinIdlePerAccount                                 int
 	CPAWSMaxIdlePerAccount                                 int

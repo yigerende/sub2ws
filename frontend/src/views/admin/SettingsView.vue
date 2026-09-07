@@ -5193,8 +5193,19 @@
           <!-- CPA-style upstream WebSocket execution -->
           <div class="card">
             <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
-              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">CPA WS 上游执行参数</h2>
-              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">只作用于账号开启“CPA WS 执行逻辑”后的上游连接池；不改变账号选择、计费和普通 Sub2API WS。</p>
+              <div class="flex items-center justify-between gap-6">
+                <div>
+                  <h2 class="text-lg font-semibold text-gray-900 dark:text-white">CPA WS 上游执行参数</h2>
+                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">配置 CPAWS 上游连接池；不改变账号选择和计费逻辑。</p>
+                </div>
+                <Toggle
+                  v-model="form.cpa_ws_global_oauth_enabled"
+                  data-testid="cpa-ws-global-oauth-toggle"
+                />
+              </div>
+              <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">
+                全局默认：开启后，所有 OpenAI OAuth 账号都会使用 CPAWS，并默认开启缓存亲和、共享前缀热度，亲和模式为“均衡”；优先级高于账号级 CPAWS 开关。setup-token 和 API Key 仍按账号设置执行。
+              </p>
             </div>
             <div class="grid grid-cols-1 gap-4 p-6 md:grid-cols-2 xl:grid-cols-4">
               <label v-for="field in cpaWSSettingFields" :key="field.key" class="block">
@@ -9533,6 +9544,7 @@ type SettingsForm = Omit<
   openai_advanced_scheduler_weight_upstream_cost: string;
   openai_advanced_scheduler_weight_previous_response: string;
   openai_advanced_scheduler_weight_session_sticky: string;
+  cpa_ws_global_oauth_enabled: boolean;
   cpa_ws_max_conns_per_account: number;
   cpa_ws_min_idle_per_account: number;
   cpa_ws_max_idle_per_account: number;
@@ -9792,6 +9804,7 @@ const form = reactive<SettingsForm>({
   openai_advanced_scheduler_weight_upstream_cost: "",
   openai_advanced_scheduler_weight_previous_response: "",
   openai_advanced_scheduler_weight_session_sticky: "",
+  cpa_ws_global_oauth_enabled: false,
   cpa_ws_max_conns_per_account: 48,
   cpa_ws_min_idle_per_account: 3,
   cpa_ws_max_idle_per_account: 48,
@@ -11520,6 +11533,7 @@ async function saveSettings() {
         form.openai_advanced_scheduler_weight_previous_response.trim(),
       openai_advanced_scheduler_weight_session_sticky:
         form.openai_advanced_scheduler_weight_session_sticky.trim(),
+      cpa_ws_global_oauth_enabled: form.cpa_ws_global_oauth_enabled,
       cpa_ws_max_conns_per_account: cpaWSNumberOrDefault(form.cpa_ws_max_conns_per_account, 48),
       cpa_ws_min_idle_per_account: cpaWSNumberOrDefault(form.cpa_ws_min_idle_per_account, 3),
       cpa_ws_max_idle_per_account: cpaWSNumberOrDefault(form.cpa_ws_max_idle_per_account, 48),

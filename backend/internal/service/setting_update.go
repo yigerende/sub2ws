@@ -524,6 +524,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightUpstreamCost] = settings.OpenAIAdvancedSchedulerWeightUpstreamCost
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightPreviousResponse] = settings.OpenAIAdvancedSchedulerWeightPreviousResponse
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky] = settings.OpenAIAdvancedSchedulerWeightSessionSticky
+	updates[SettingKeyCPAWSGlobalOAuthEnabled] = strconv.FormatBool(settings.CPAWSGlobalOAuthEnabled)
 	updates[SettingKeyCPAWSMaxConnsPerAccount] = strconv.Itoa(settings.CPAWSMaxConnsPerAccount)
 	updates[SettingKeyCPAWSMinIdlePerAccount] = strconv.Itoa(settings.CPAWSMinIdlePerAccount)
 	updates[SettingKeyCPAWSMaxIdlePerAccount] = strconv.Itoa(settings.CPAWSMaxIdlePerAccount)

@@ -341,6 +341,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		OpenAIAdvancedSchedulerEffectiveWeightUpstreamCost:     settings.OpenAIAdvancedSchedulerEffectiveWeightUpstreamCost,
 		OpenAIAdvancedSchedulerEffectiveWeightPreviousResponse: settings.OpenAIAdvancedSchedulerEffectiveWeightPreviousResponse,
 		OpenAIAdvancedSchedulerEffectiveWeightSessionSticky:    settings.OpenAIAdvancedSchedulerEffectiveWeightSessionSticky,
+		CPAWSGlobalOAuthEnabled:                                settings.CPAWSGlobalOAuthEnabled,
 		CPAWSMaxConnsPerAccount:                                settings.CPAWSMaxConnsPerAccount,
 		CPAWSMinIdlePerAccount:                                 settings.CPAWSMinIdlePerAccount,
 		CPAWSMaxIdlePerAccount:                                 settings.CPAWSMaxIdlePerAccount,
