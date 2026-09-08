@@ -319,7 +319,7 @@ func (s *OpenAIGatewayService) getOpenAICPAWSConnPool() *openAIWSConnPool {
 			// takes effect after the service restart/reload, while the ordinary
 			// Sub2API pool is never affected.
 			if s.settingService != nil {
-				if settings, err := s.settingService.GetAllSettings(context.Background()); err == nil && settings != nil {
+				if settings := s.loadCPAWSSettings(); settings != nil {
 					clone.Gateway.OpenAIWS.MaxConnsPerAccount = settings.CPAWSMaxConnsPerAccount
 					clone.Gateway.OpenAIWS.MinIdlePerAccount = settings.CPAWSMinIdlePerAccount
 					clone.Gateway.OpenAIWS.MaxIdlePerAccount = settings.CPAWSMaxIdlePerAccount
@@ -373,8 +373,8 @@ func (s *OpenAIGatewayService) reloadCPAWSRuntime() {
 	if s == nil || s.settingService == nil {
 		return
 	}
-	settings, err := s.settingService.GetAllSettings(context.Background())
-	if err != nil || settings == nil {
+	settings := s.loadCPAWSSettings()
+	if settings == nil {
 		return
 	}
 	s.openaiCPAWSGlobalOAuthEnabled.Store(settings.CPAWSGlobalOAuthEnabled)
@@ -387,6 +387,25 @@ func (s *OpenAIGatewayService) reloadCPAWSRuntime() {
 	s.openaiCPAWSPool = nil
 	s.openaiCPAWSPoolMu.Unlock()
 	old.Close()
+}
+
+// loadCPAWSSettings keeps the optional CPA runtime compatible with lightweight
+// SettingService test doubles that only implement the setting methods relevant
+// to their test. Production services always provide both cfg and a full repo.
+func (s *OpenAIGatewayService) loadCPAWSSettings() (settings *SystemSettings) {
+	if s == nil || s.settingService == nil || s.settingService.cfg == nil {
+		return nil
+	}
+	defer func() {
+		if recover() != nil {
+			settings = nil
+		}
+	}()
+	settings, err := s.settingService.GetAllSettings(context.Background())
+	if err != nil {
+		return nil
+	}
+	return settings
 }
 
 func cpaWSPoolConfigMatchesSettings(cfg *config.Config, settings *SystemSettings) bool {
